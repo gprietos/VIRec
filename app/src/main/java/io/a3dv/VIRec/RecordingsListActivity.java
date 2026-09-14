@@ -1,5 +1,6 @@
 package io.a3dv.VIRec;
 
+import android.app.AlertDialog;
 import android.content.Intent;
 import android.os.Bundle;
 import android.os.Environment;
@@ -7,6 +8,7 @@ import android.view.View;
 import android.widget.TextView;
 
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.recyclerview.widget.DividerItemDecoration;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
@@ -38,11 +40,16 @@ public class RecordingsListActivity extends AppCompatActivity
         mRecyclerView = findViewById(R.id.recordings_list);
         mEmptyView = findViewById(R.id.recordings_empty);
         mRecyclerView.setLayoutManager(new LinearLayoutManager(this));
+        mRecyclerView.addItemDecoration(new DividerItemDecoration(this, DividerItemDecoration.VERTICAL));
     }
 
     @Override
     protected void onResume() {
         super.onResume();
+        refreshSessions();
+    }
+
+    private void refreshSessions() {
         List<RecordingSession> sessions = loadSessions();
         if (sessions.isEmpty()) {
             mRecyclerView.setVisibility(View.GONE);
@@ -84,5 +91,30 @@ public class RecordingsListActivity extends AppCompatActivity
         Intent intent = new Intent(this, RecordingViewerActivity.class);
         intent.putExtra(EXTRA_SESSION_DIR, session.getDir().getAbsolutePath());
         startActivity(intent);
+    }
+
+    @Override
+    public void onSessionDeleteRequested(RecordingSession session) {
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.delete_recording_title)
+                .setMessage(R.string.delete_recording_message)
+                .setPositiveButton(R.string.delete_recording_confirm, (dialog, which) -> {
+                    deleteRecursively(session.getDir());
+                    refreshSessions();
+                })
+                .setNegativeButton(R.string.delete_recording_cancel, null)
+                .show();
+    }
+
+    private static void deleteRecursively(File file) {
+        if (file.isDirectory()) {
+            File[] children = file.listFiles();
+            if (children != null) {
+                for (File child : children) {
+                    deleteRecursively(child);
+                }
+            }
+        }
+        file.delete();
     }
 }

@@ -18,6 +18,7 @@ import android.util.Size;
 import android.view.Display;
 import android.view.Gravity;
 import android.view.MenuItem;
+import android.view.OrientationEventListener;
 import android.view.Surface;
 import android.view.View;
 import android.view.WindowManager;
@@ -201,6 +202,10 @@ public class CameraActivity extends CameraActivityBase
     private CameraSurfaceRenderer mRenderer = null;
     private CameraSurfaceRenderer mRenderer2 = null;
     private TextView mOutputDirText;
+    private TextView mOutputDirLabel;
+    private TextView mNumSnapshotLabel;
+    private TextView mNumSnapshotText;
+    private TextView mGpsStatusText;
 
     private CameraHandler mCameraHandler;
     private CameraHandler mCameraHandler2;
@@ -212,6 +217,14 @@ public class CameraActivity extends CameraActivityBase
 
     private StreamingServer mStreamingServer;
     private TextView mStreamingStatusText;
+
+    // Rotates the overlay TextViews to compensate for phone orientation so their text
+    // stays upright even though the Activity itself is locked to portrait.
+    private OrientationEventListener mOrientationEventListener;
+    private int mLastAppliedRotationBucket = 0;
+
+    // Hides all overlay info TextViews when the user enables Settings > Hide Overlay Info.
+    private boolean mHideOverlayInfo;
 
     // Front camera is off by default (Settings > Enable Front Camera); read once per activity
     // lifecycle in onCreate since changing it only takes effect after the activity restarts.
@@ -330,13 +343,48 @@ public class CameraActivity extends CameraActivityBase
         mKeyCameraParamsText2 = findViewById(R.id.cameraParams_text2);
         mCaptureResultText = findViewById(R.id.captureResult_text);
         mCaptureResultText2 = findViewById(R.id.captureResult_text2);
+        mOutputDirLabel = findViewById(R.id.cameraOutputDirLabel);
         mOutputDirText = findViewById(R.id.cameraOutputDir_text);
+        mNumSnapshotLabel = findViewById(R.id.numSnapshotLabel);
+        mNumSnapshotText = findViewById(R.id.numSnapshot_text);
+        mGpsStatusText = findViewById(R.id.gps_status);
         mStreamingStatusText = findViewById(R.id.streaming_status_text);
 
-        if (!mSecondCameraEnabled) {
-            mKeyCameraParamsText2.setVisibility(View.GONE);
-            mCaptureResultText2.setVisibility(View.GONE);
+        updateOverlayVisibility();
+    }
+
+    /**
+     * Applies visibility to the overlay info TextViews based on two independent rules:
+     * a view is hidden if Settings > Hide Overlay Info is on, OR if it would already be
+     * hidden by existing logic (currently: the second-camera views when the front camera
+     * is disabled). Neither rule overrides the other in the "show" direction -- turning
+     * hide-overlay off never forces the camera2 views back to VISIBLE if they're gone
+     * because the second camera itself is disabled.
+     */
+    private void updateOverlayVisibility() {
+        boolean camera2Hidden = !mSecondCameraEnabled;
+
+        setOverlayVisibility(mKeyCameraParamsText, mHideOverlayInfo);
+        setOverlayVisibility(mCaptureResultText, mHideOverlayInfo);
+        setOverlayVisibility(mKeyCameraParamsText2, mHideOverlayInfo || camera2Hidden);
+        setOverlayVisibility(mCaptureResultText2, mHideOverlayInfo || camera2Hidden);
+        setOverlayVisibility(mOutputDirLabel, mHideOverlayInfo);
+        setOverlayVisibility(mOutputDirText, mHideOverlayInfo);
+        setOverlayVisibility(mNumSnapshotLabel, mHideOverlayInfo);
+        setOverlayVisibility(mNumSnapshotText, mHideOverlayInfo);
+        setOverlayVisibility(mGpsStatusText, mHideOverlayInfo);
+        // mStreamingStatusText has its own VISIBLE/GONE logic driven by whether streaming is
+        // actually running (set later in onResume()); only force it GONE here when hiding.
+        if (mHideOverlayInfo && mStreamingStatusText != null) {
+            mStreamingStatusText.setVisibility(View.GONE);
         }
+    }
+
+    private void setOverlayVisibility(TextView view, boolean hidden) {
+        if (view == null) {
+            return;
+        }
+        view.setVisibility(hidden ? View.GONE : View.VISIBLE);
     }
 
     @Override
@@ -381,7 +429,29 @@ public class CameraActivity extends CameraActivityBase
         mImuManager.register();
         mGpsManager.register();
 
+        if (mOrientationEventListener == null) {
+            mOrientationEventListener = new OrientationEventListener(this) {
+                @Override
+                public void onOrientationChanged(int orientation) {
+                    if (orientation == ORIENTATION_UNKNOWN) {
+                        return;
+                    }
+                    int bucket = Math.round(orientation / 90.0f) * 90 % 360;
+                    if (bucket == mLastAppliedRotationBucket) {
+                        return;
+                    }
+                    mLastAppliedRotationBucket = bucket;
+                    int compensated = (360 - bucket) % 360;
+                    rotateOverlayViews(compensated);
+                }
+            };
+        }
+        mOrientationEventListener.enable();
+
         SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(this);
+        mHideOverlayInfo = prefs.getBoolean("prefHideOverlayInfo", false);
+        updateOverlayVisibility();
+
         boolean streamingEnabled = prefs.getBoolean("prefEnableStreaming", false);
         if (streamingEnabled) {
             int port;
@@ -413,7 +483,7 @@ public class CameraActivity extends CameraActivityBase
                 }
                 String ip = NetworkUtils.getLocalIpAddress();
                 mStreamingStatusText.setText("http://" + (ip != null ? ip : "?") + ":" + port + "/");
-                mStreamingStatusText.setVisibility(View.VISIBLE);
+                mStreamingStatusText.setVisibility(mHideOverlayInfo ? View.GONE : View.VISIBLE);
             } catch (IOException e) {
                 Timber.e(e, "Failed to start streaming server");
                 mStreamingStatusText.setVisibility(View.GONE);
@@ -460,7 +530,36 @@ public class CameraActivity extends CameraActivityBase
 
         mImuManager.unregister();
         mGpsManager.unregister();
+
+        if (mOrientationEventListener != null) {
+            mOrientationEventListener.disable();
+        }
         Timber.d("onPause complete");
+    }
+
+    /**
+     * Rotates the overlay info TextViews to the given compensated angle so their text stays
+     * upright regardless of how the phone is physically held. Purely cosmetic -- does not
+     * touch the portrait lock or the camera preview/surface logic.
+     */
+    private void rotateOverlayViews(int compensated) {
+        rotateOverlayView(mKeyCameraParamsText, compensated);
+        rotateOverlayView(mCaptureResultText, compensated);
+        rotateOverlayView(mKeyCameraParamsText2, compensated);
+        rotateOverlayView(mCaptureResultText2, compensated);
+        rotateOverlayView(mOutputDirLabel, compensated);
+        rotateOverlayView(mOutputDirText, compensated);
+        rotateOverlayView(mNumSnapshotLabel, compensated);
+        rotateOverlayView(mNumSnapshotText, compensated);
+        rotateOverlayView(mGpsStatusText, compensated);
+        rotateOverlayView(mStreamingStatusText, compensated);
+    }
+
+    private void rotateOverlayView(TextView view, int compensated) {
+        if (view == null) {
+            return;
+        }
+        view.animate().rotation(compensated).setDuration(200).start();
     }
 
     @Override

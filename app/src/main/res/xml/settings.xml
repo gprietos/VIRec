@@ -105,4 +105,18 @@
             app:iconSpaceReserved="false" />
 
     </PreferenceCategory>
+
+    <PreferenceCategory
+        android:title="Display Settings"
+        app:iconSpaceReserved="false">
+
+        <SwitchPreference
+            android:defaultValue="false"
+            android:key="prefHideOverlayInfo"
+            android:summaryOff="Off (camera params, output dir, GPS/streaming status shown on screen)"
+            android:summaryOn="On (hides on-screen camera/GPS/streaming info text)"
+            android:title="Hide Overlay Info"
+            app:iconSpaceReserved="false" />
+
+    </PreferenceCategory>
 </PreferenceScreen>

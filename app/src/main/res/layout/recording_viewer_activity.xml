@@ -9,6 +9,60 @@
         android:orientation="vertical"
         android:padding="@dimen/activity_horizontal_margin">
 
+        <!-- Main camera video -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Main Camera"
+            android:textAppearance="?attr/textAppearanceListItem"
+            android:textStyle="bold" />
+
+        <VideoView
+            android:id="@+id/video_main"
+            android:layout_width="match_parent"
+            android:layout_height="250dp" />
+
+        <TextView
+            android:id="@+id/video_main_fallback"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_margin="@dimen/text_margin"
+            android:text="@string/no_video_available"
+            android:visibility="gone" />
+
+        <!-- Front camera video -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/text_margin"
+            android:text="Front Camera"
+            android:textAppearance="?attr/textAppearanceListItem"
+            android:textStyle="bold" />
+
+        <VideoView
+            android:id="@+id/video_front"
+            android:layout_width="match_parent"
+            android:layout_height="250dp" />
+
+        <TextView
+            android:id="@+id/video_front_fallback"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_margin="@dimen/text_margin"
+            android:text="@string/no_video_available"
+            android:visibility="gone" />
+
+        <!-- Consolidated values-at-selected-timestamp readout, filled in when any chart below
+             is touched -->
+        <TextView
+            android:id="@+id/values_at_timestamp_text"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/text_margin"
+            android:layout_marginBottom="@dimen/text_margin"
+            android:text="Touch a chart below to see every sensor's value at that timestamp."
+            android:textIsSelectable="true" />
+
         <!-- Gyroscope -->
         <TextView
             android:layout_width="wrap_content"

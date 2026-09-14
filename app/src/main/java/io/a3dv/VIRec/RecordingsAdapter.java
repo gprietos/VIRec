@@ -3,6 +3,7 @@ package io.a3dv.VIRec;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.ImageButton;
 import android.widget.TextView;
 
 import androidx.annotation.NonNull;
@@ -13,6 +14,7 @@ import java.util.List;
 public class RecordingsAdapter extends RecyclerView.Adapter<RecordingsAdapter.ViewHolder> {
     public interface OnSessionClickListener {
         void onSessionClick(RecordingSession session);
+        void onSessionDeleteRequested(RecordingSession session);
     }
 
     private final List<RecordingSession> mSessions;
@@ -40,6 +42,11 @@ public class RecordingsAdapter extends RecyclerView.Adapter<RecordingsAdapter.Vi
                 mListener.onSessionClick(holder.mItem);
             }
         });
+        holder.mDeleteButton.setOnClickListener(v -> {
+            if (null != mListener) {
+                mListener.onSessionDeleteRequested(holder.mItem);
+            }
+        });
     }
 
     @Override
@@ -50,12 +57,14 @@ public class RecordingsAdapter extends RecyclerView.Adapter<RecordingsAdapter.Vi
     public static class ViewHolder extends RecyclerView.ViewHolder {
         public final View mView;
         public final TextView mNameView;
+        public final ImageButton mDeleteButton;
         public RecordingSession mItem;
 
         public ViewHolder(View view) {
             super(view);
             mView = view;
             mNameView = view.findViewById(R.id.session_name);
+            mDeleteButton = view.findViewById(R.id.delete_button);
         }
 
         @NonNull
