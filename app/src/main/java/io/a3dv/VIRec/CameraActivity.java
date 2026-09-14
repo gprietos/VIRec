@@ -559,7 +559,29 @@ public class CameraActivity extends CameraActivityBase
         if (view == null) {
             return;
         }
-        view.animate().rotation(compensated).setDuration(200).start();
+        view.setPivotX(0f);
+        view.setPivotY(0f);
+        float tx = 0f;
+        float ty = 0f;
+        int width = view.getWidth();
+        int height = view.getHeight();
+        if (width > 0 && height > 0) {
+            switch (compensated) {
+                case 90:
+                    tx = height;
+                    break;
+                case 180:
+                    tx = width;
+                    ty = height;
+                    break;
+                case 270:
+                    ty = width;
+                    break;
+                default:
+                    break;
+            }
+        }
+        view.animate().rotation(compensated).translationX(tx).translationY(ty).setDuration(200).start();
     }
 
     @Override

@@ -11,16 +11,34 @@
 
         <!-- Main camera video -->
         <TextView
+            android:id="@+id/label_video_main"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:text="Main Camera"
             android:textAppearance="?attr/textAppearanceListItem"
             android:textStyle="bold" />
 
-        <VideoView
-            android:id="@+id/video_main"
+        <FrameLayout
+            android:id="@+id/video_main_container"
             android:layout_width="match_parent"
-            android:layout_height="250dp" />
+            android:layout_height="250dp">
+
+            <VideoView
+                android:id="@+id/video_main"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent" />
+
+            <ImageButton
+                android:id="@+id/button_rotate_main"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:layout_gravity="top|end"
+                android:layout_margin="4dp"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="@string/rotate_video_content_description"
+                android:src="@drawable/ic_baseline_rotate_90_24" />
+
+        </FrameLayout>
 
         <TextView
             android:id="@+id/video_main_fallback"
@@ -32,6 +50,7 @@
 
         <!-- Front camera video -->
         <TextView
+            android:id="@+id/label_video_front"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="@dimen/text_margin"
@@ -39,10 +58,27 @@
             android:textAppearance="?attr/textAppearanceListItem"
             android:textStyle="bold" />
 
-        <VideoView
-            android:id="@+id/video_front"
+        <FrameLayout
+            android:id="@+id/video_front_container"
             android:layout_width="match_parent"
-            android:layout_height="250dp" />
+            android:layout_height="250dp">
+
+            <VideoView
+                android:id="@+id/video_front"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent" />
+
+            <ImageButton
+                android:id="@+id/button_rotate_front"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:layout_gravity="top|end"
+                android:layout_margin="4dp"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="@string/rotate_video_content_description"
+                android:src="@drawable/ic_baseline_rotate_90_24" />
+
+        </FrameLayout>
 
         <TextView
             android:id="@+id/video_front_fallback"
@@ -53,18 +89,21 @@
             android:visibility="gone" />
 
         <!-- Consolidated values-at-selected-timestamp readout, filled in when any chart below
-             is touched -->
+             is touched. Not selectable: textIsSelectable makes the view focusable, and setText()
+             on every chart touch would otherwise trigger the ScrollView's scroll-to-focused-
+             descendant behavior mid-interaction. -->
         <TextView
             android:id="@+id/values_at_timestamp_text"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="@dimen/text_margin"
             android:layout_marginBottom="@dimen/text_margin"
-            android:text="Touch a chart below to see every sensor's value at that timestamp."
-            android:textIsSelectable="true" />
+            android:focusable="false"
+            android:text="Touch a chart below to see every sensor's value at that timestamp." />
 
         <!-- Gyroscope -->
         <TextView
+            android:id="@+id/label_chart_gyro"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="@dimen/text_margin"
@@ -86,6 +125,7 @@
 
         <!-- Accelerometer -->
         <TextView
+            android:id="@+id/label_chart_accel"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="@dimen/text_margin"
@@ -107,6 +147,7 @@
 
         <!-- Orientation -->
         <TextView
+            android:id="@+id/label_chart_orientation"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="@dimen/text_margin"
@@ -128,6 +169,7 @@
 
         <!-- GPS -->
         <TextView
+            android:id="@+id/label_chart_gps"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="@dimen/text_margin"

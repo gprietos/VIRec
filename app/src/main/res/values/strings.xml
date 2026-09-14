@@ -53,4 +53,5 @@
     <string name="delete_recording_cancel">Cancel</string>
     <string name="delete_recording_content_description">Delete recording</string>
     <string name="no_video_available">No video available for this recording.</string>
+    <string name="rotate_video_content_description">Rotate video</string>
 </resources>
