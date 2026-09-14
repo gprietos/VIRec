@@ -508,10 +508,11 @@ public class RecordingViewerActivity extends AppCompatActivity {
             // the same TextureView), so this naturally applies only on first load -- it can't
             // re-trigger on later frames or clobber a rotation the user later sets via the
             // rotate button. Portrait-shot footage otherwise starts letterboxed to a sliver; default
-            // it to landscape display (90 degrees) so the rotate button's next tap then cycles
-            // onward from 90 instead of 0.
+            // it to landscape display. 270 (not 90) -- confirmed on-device that a plain 90-degree
+            // default displayed upside down, so the correct landscape orientation is 180 degrees
+            // further around. The rotate button's next tap then cycles onward from 270 instead of 0.
             if (videoHeight > videoWidth) {
-                rotationDeg = 90f;
+                rotationDeg = 270f;
             }
             if (isMain) {
                 mainVideoRotationDeg = rotationDeg;
