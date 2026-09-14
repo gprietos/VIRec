@@ -29,6 +29,7 @@ import android.widget.Spinner;
 import android.widget.TextView;
 
 import androidx.annotation.RequiresApi;
+import androidx.preference.PreferenceManager;
 
 import java.io.File;
 import java.lang.ref.WeakReference;
@@ -206,10 +207,16 @@ public class CameraActivity extends CameraActivityBase
     private GPSManager mGpsManager;
     private TimeBaseManager mTimeBaseManager;
 
+    // Front camera is off by default (Settings > Enable Front Camera); read once per activity
+    // lifecycle in onCreate since changing it only takes effect after the activity restarts.
+    private boolean mSecondCameraEnabled;
+
     @SuppressLint("SourceLockedOrientationActivity")
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        mSecondCameraEnabled = PreferenceManager.getDefaultSharedPreferences(this)
+                .getBoolean("prefEnableFrontCamera", false);
         setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT);
         setContentView(R.layout.camera_activity);
         Spinner spinner = findViewById(R.id.cameraFilter_spinner);
@@ -233,10 +240,12 @@ public class CameraActivity extends CameraActivityBase
                     mRenderer.changeFilterMode(filterNum);
                 });
 
-                mGLView2.queueEvent(() -> {
-                    // notify the renderer that we want to change the encoder's state
-                    mRenderer2.changeFilterMode(filterNum);
-                });
+                if (mSecondCameraEnabled) {
+                    mGLView2.queueEvent(() -> {
+                        // notify the renderer that we want to change the encoder's state
+                        mRenderer2.changeFilterMode(filterNum);
+                    });
+                }
             }
 
             @Override
@@ -249,17 +258,19 @@ public class CameraActivity extends CameraActivityBase
     protected void onStart() {
         super.onStart();
         mCamera2Proxy = new Camera2Proxy(this, false);
-        mCamera2Proxy2 = new Camera2Proxy(this, true);
         Size previewSize = mCamera2Proxy.configureCamera();
-        mCamera2Proxy2.configureCamera();
         setLayoutAspectRatio(previewSize);  // updates mCameraPreviewWidth/Height
         Size videoSize = mCamera2Proxy.getmVideoSize();
         mVideoFrameWidth = videoSize.getWidth();
         mVideoFrameHeight = videoSize.getHeight();
 
-        Size videoSize2 = mCamera2Proxy2.getmVideoSize();
-        mVideoFrameWidth2 = videoSize2.getWidth();
-        mVideoFrameHeight2 = videoSize2.getHeight();
+        if (mSecondCameraEnabled) {
+            mCamera2Proxy2 = new Camera2Proxy(this, true);
+            mCamera2Proxy2.configureCamera();
+            Size videoSize2 = mCamera2Proxy2.getmVideoSize();
+            mVideoFrameWidth2 = videoSize2.getWidth();
+            mVideoFrameHeight2 = videoSize2.getHeight();
+        }
         // Define a handler that receives camera-control messages from other threads.  All calls
         // to Camera must be made on the same thread.  Note we create this before the renderer
         // thread, so we know the fully-constructed object will be visible.
@@ -280,11 +291,15 @@ public class CameraActivity extends CameraActivityBase
             mGLView.setRenderMode(GLSurfaceView.RENDERMODE_WHEN_DIRTY);
         }
 
-        if (mRenderer2 == null) {
-            mRenderer2 = new CameraSurfaceRenderer(mCameraHandler2, sVideoEncoder2, 1);
-            mGLView2.setEGLContextClientVersion(2);     // select GLES 2.0
-            mGLView2.setRenderer(mRenderer2);
-            mGLView2.setRenderMode(GLSurfaceView.RENDERMODE_WHEN_DIRTY);
+        if (mSecondCameraEnabled) {
+            if (mRenderer2 == null) {
+                mRenderer2 = new CameraSurfaceRenderer(mCameraHandler2, sVideoEncoder2, 1);
+                mGLView2.setEGLContextClientVersion(2);     // select GLES 2.0
+                mGLView2.setRenderer(mRenderer2);
+                mGLView2.setRenderMode(GLSurfaceView.RENDERMODE_WHEN_DIRTY);
+            }
+        } else {
+            mGLView2.setVisibility(View.GONE);
         }
 
         mGLView.setTouchListener((event, width, height) -> {
@@ -310,6 +325,11 @@ public class CameraActivity extends CameraActivityBase
         mCaptureResultText = findViewById(R.id.captureResult_text);
         mCaptureResultText2 = findViewById(R.id.captureResult_text2);
         mOutputDirText = findViewById(R.id.cameraOutputDir_text);
+
+        if (!mSecondCameraEnabled) {
+            mKeyCameraParamsText2.setVisibility(View.GONE);
+            mCaptureResultText2.setVisibility(View.GONE);
+        }
     }
 
     @Override
@@ -329,7 +349,7 @@ public class CameraActivity extends CameraActivityBase
             mVideoFrameHeight = videoSize.getHeight();
         }
 
-        if (mCamera2Proxy2 == null) {
+        if (mSecondCameraEnabled && mCamera2Proxy2 == null) {
             mCamera2Proxy2 = new Camera2Proxy(this, true);
             mCamera2Proxy2.configureCamera();
             Size videoSize = mCamera2Proxy2.getmVideoSize();
@@ -343,11 +363,13 @@ public class CameraActivity extends CameraActivityBase
             mRenderer.setVideoFrameSize(mVideoFrameWidth, mVideoFrameHeight);
         });
 
-        mGLView2.onResume();
-        mGLView2.queueEvent(() -> {
-            mRenderer2.setCameraPreviewSize(mCameraPreviewWidth, mCameraPreviewHeight);
-            mRenderer2.setVideoFrameSize(mVideoFrameWidth2, mVideoFrameHeight2);
-        });
+        if (mSecondCameraEnabled) {
+            mGLView2.onResume();
+            mGLView2.queueEvent(() -> {
+                mRenderer2.setCameraPreviewSize(mCameraPreviewWidth, mCameraPreviewHeight);
+                mRenderer2.setVideoFrameSize(mVideoFrameWidth2, mVideoFrameHeight2);
+            });
+        }
 
         mImuManager.register();
         mGpsManager.register();
@@ -374,11 +396,13 @@ public class CameraActivity extends CameraActivityBase
         });
         mGLView.onPause();
 
-        mGLView2.queueEvent(() -> {
-            // Tell the renderer that it's about to be paused so it can clean up.
-            mRenderer2.notifyPausing();
-        });
-        mGLView2.onPause();
+        if (mSecondCameraEnabled) {
+            mGLView2.queueEvent(() -> {
+                // Tell the renderer that it's about to be paused so it can clean up.
+                mRenderer2.notifyPausing();
+            });
+            mGLView2.onPause();
+        }
 
         mImuManager.unregister();
         mGpsManager.unregister();
@@ -399,14 +423,11 @@ public class CameraActivity extends CameraActivityBase
         if (mRecordingEnabled) {
             String outputDir = renewOutputDir();
             String outputFile = outputDir + File.separator + "movie.mp4";
-            String outputFile2 = outputDir + File.separator + "movie2.mp4";
             String metaFile = outputDir + File.separator + "frame_timestamps.txt";
-            String metaFile2 = outputDir + File.separator + "frame_timestamps2.txt";
 
             String basename = outputDir.substring(outputDir.lastIndexOf("/") + 1);
             mOutputDirText.setText(basename);
             mRenderer.resetOutputFiles(outputFile, metaFile); // this will not cause sync issues
-            mRenderer2.resetOutputFiles(outputFile2, metaFile2);
 
             String inertialFile = outputDir + File.separator + "gyro_accel.csv";
             String locationFile = outputDir + File.separator + "location.csv";
@@ -417,11 +438,19 @@ public class CameraActivity extends CameraActivityBase
             mGpsManager.startRecording(locationFile);
             mCamera2Proxy.startRecordingCaptureResult(
                     outputDir + File.separator + "movie_metadata.csv");
-            mCamera2Proxy2.startRecordingCaptureResult(
-                    outputDir + File.separator + "movie_metadata2.csv");
+
+            if (mSecondCameraEnabled) {
+                String outputFile2 = outputDir + File.separator + "movie2.mp4";
+                String metaFile2 = outputDir + File.separator + "frame_timestamps2.txt";
+                mRenderer2.resetOutputFiles(outputFile2, metaFile2);
+                mCamera2Proxy2.startRecordingCaptureResult(
+                        outputDir + File.separator + "movie_metadata2.csv");
+            }
         } else {
             mCamera2Proxy.stopRecordingCaptureResult();
-            mCamera2Proxy2.stopRecordingCaptureResult();
+            if (mSecondCameraEnabled) {
+                mCamera2Proxy2.stopRecordingCaptureResult();
+            }
             mImuManager.stopRecording();
             mGpsManager.stopRecording();
             mTimeBaseManager.stopRecording();
@@ -432,10 +461,12 @@ public class CameraActivity extends CameraActivityBase
             mRenderer.changeRecordingState(mRecordingEnabled);
         });
 
-        mGLView2.queueEvent(() -> {
-            // notify the renderer that we want to change the encoder's state
-            mRenderer2.changeRecordingState(mRecordingEnabled);
-        });
+        if (mSecondCameraEnabled) {
+            mGLView2.queueEvent(() -> {
+                // notify the renderer that we want to change the encoder's state
+                mRenderer2.changeRecordingState(mRecordingEnabled);
+            });
+        }
 
         updateControls();
     }

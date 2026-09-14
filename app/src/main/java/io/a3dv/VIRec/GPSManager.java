@@ -6,6 +6,7 @@ import android.content.Context;
 import android.location.Location;
 import android.location.LocationListener;
 import android.location.LocationManager;
+import android.os.Build;
 import android.os.Bundle;
 import android.text.format.DateFormat;
 import android.widget.TextView;
@@ -68,16 +69,25 @@ public class GPSManager implements LocationListener {
         mGpsManager = (LocationManager) activity.getSystemService(Context.LOCATION_SERVICE);
 
         mGpsStatusText = (TextView) activity.findViewById(R.id.gps_status);
-        if (mGpsManager.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
+        if (mGpsManager.isProviderEnabled(getBestProvider())) {
             mGpsStatusText.setText(R.string.gpsLooking);
         } else {
             mGpsStatusText.setText(R.string.gpsStatusDisabled);
         }
     }
 
+    // FUSED_PROVIDER (API 31+) combines GPS/network/other location sources and typically gets a
+    // fix far faster than raw GPS_PROVIDER, which needs open-sky visibility and can take a long
+    // time (or never lock) indoors. No Play Services dependency required.
+    private static String getBestProvider() {
+        return Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+                ? LocationManager.FUSED_PROVIDER
+                : LocationManager.GPS_PROVIDER;
+    }
+
     @SuppressLint("MissingPermission")
     public void startRecording(String captureResultFile) {
-        mGpsManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, 0, 0, this);
+        mGpsManager.requestLocationUpdates(getBestProvider(), 0, 0, this);
 
         try {
             mDataWriter = new BufferedWriter(new FileWriter(captureResultFile, false));
@@ -162,7 +172,7 @@ public class GPSManager implements LocationListener {
 
     @SuppressLint("MissingPermission")
     public void register() {
-        mGpsManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, 0, 0, this);
+        mGpsManager.requestLocationUpdates(getBestProvider(), 0, 0, this);
     }
 
     public void unregister() {

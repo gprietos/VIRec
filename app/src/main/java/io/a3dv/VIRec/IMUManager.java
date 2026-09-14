@@ -15,6 +15,7 @@ import androidx.annotation.NonNull;
 import androidx.preference.PreferenceManager;
 
 import java.io.BufferedWriter;
+import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.util.ArrayDeque;
@@ -26,6 +27,13 @@ import timber.log.Timber;
 public class IMUManager implements SensorEventListener {
     public static String ImuHeader = "Timestamp[nanosec],gx[rad/s],gy[rad/s],gz[rad/s]," +
             "ax[m/s^2],ay[m/s^2],az[m/s^2],Unix time[nanosec]\n";
+
+    // TYPE_ROTATION_VECTOR is Android's own accelerometer+gyroscope+magnetometer fusion,
+    // referenced to magnetic/true north (an East-North-Up world frame) -- unlike raw
+    // gyro/accel above, it needs no manual integration and does not drift, so it's the
+    // actual yaw/pitch/roll source for Frame rather than something derived from gyro_accel.csv.
+    public static String OrientationHeader =
+            "Timestamp[nanosec],yaw[deg],pitch[deg],roll[deg],Unix time[nanosec]\n";
 
     private static class SensorPacket {
         long timestamp; // nanoseconds
@@ -56,19 +64,24 @@ public class IMUManager implements SensorEventListener {
     private final SensorManager mSensorManager;
     private final Sensor mAccel;
     private final Sensor mGyro;
+    private final Sensor mRotationVector;
     private static SharedPreferences mSharedPreferences;
 
     private volatile boolean mRecordingInertialData = false;
     private BufferedWriter mDataWriter = null;
+    private BufferedWriter mOrientationWriter = null;
     private HandlerThread mSensorThread;
 
     private final Deque<SensorPacket> mGyroData = new ArrayDeque<>();
     private final Deque<SensorPacket> mAccelData = new ArrayDeque<>();
+    private final float[] mRotationMatrix = new float[9];
+    private final float[] mOrientationRad = new float[3];
 
     public IMUManager(Activity activity) {
         mSensorManager = (SensorManager) activity.getSystemService(Context.SENSOR_SERVICE);
         mAccel = mSensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER);
         mGyro = mSensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE);
+        mRotationVector = mSensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR);
         mSharedPreferences = PreferenceManager.getDefaultSharedPreferences(activity);
     }
 
@@ -85,11 +98,27 @@ public class IMUManager implements SensorEventListener {
             } else {
                 mDataWriter.write(ImuHeader);
             }
-            mRecordingInertialData = true;
         } catch (IOException err) {
             Timber.e(err, "IOException in opening inertial data writer at %s",
                     captureResultFile);
         }
+
+        String orientationFile = new File(captureResultFile).getParent()
+                + File.separator + "orientation.csv";
+        try {
+            mOrientationWriter = new BufferedWriter(new FileWriter(orientationFile, false));
+            if (mRotationVector == null) {
+                mOrientationWriter.write("The device has no fused rotation-vector sensor!\n" +
+                        "No orientation data will be logged.\n");
+            } else {
+                mOrientationWriter.write(OrientationHeader);
+            }
+        } catch (IOException err) {
+            Timber.e(err, "IOException in opening orientation data writer at %s",
+                    orientationFile);
+        }
+
+        mRecordingInertialData = true;
     }
 
     public void stopRecording() {
@@ -102,6 +131,14 @@ public class IMUManager implements SensorEventListener {
                 Timber.e(err, "IOException in closing inertial data writer");
             }
             mDataWriter = null;
+
+            try {
+                mOrientationWriter.flush();
+                mOrientationWriter.close();
+            } catch (IOException err) {
+                Timber.e(err, "IOException in closing orientation data writer");
+            }
+            mOrientationWriter = null;
         }
     }
 
@@ -213,6 +250,20 @@ public class IMUManager implements SensorEventListener {
                     Timber.e(ioe);
                 }
             }
+        } else if (event.sensor.getType() == Sensor.TYPE_ROTATION_VECTOR) {
+            if (mRecordingInertialData) {
+                SensorManager.getRotationMatrixFromVector(mRotationMatrix, event.values);
+                SensorManager.getOrientation(mRotationMatrix, mOrientationRad);
+                double yawDeg = Math.toDegrees(mOrientationRad[0]);
+                double pitchDeg = Math.toDegrees(mOrientationRad[1]);
+                double rollDeg = Math.toDegrees(mOrientationRad[2]);
+                try {
+                    mOrientationWriter.write(event.timestamp + "," + yawDeg + "," + pitchDeg
+                            + "," + rollDeg + "," + unixTime + "000000\n");
+                } catch (IOException ioe) {
+                    Timber.e(ioe);
+                }
+            }
         }
     }
 
@@ -229,6 +280,9 @@ public class IMUManager implements SensorEventListener {
         Handler sensorHandler = new Handler(mSensorThread.getLooper());
         mSensorManager.registerListener(this, mAccel, mSensorRate, sensorHandler);
         mSensorManager.registerListener(this, mGyro, mSensorRate, sensorHandler);
+        if (mRotationVector != null) {
+            mSensorManager.registerListener(this, mRotationVector, mSensorRate, sensorHandler);
+        }
     }
 
     /**
@@ -237,6 +291,9 @@ public class IMUManager implements SensorEventListener {
     public void unregister() {
         mSensorManager.unregisterListener(this, mAccel);
         mSensorManager.unregisterListener(this, mGyro);
+        if (mRotationVector != null) {
+            mSensorManager.unregisterListener(this, mRotationVector);
+        }
         mSensorManager.unregisterListener(this);
         mSensorThread.quitSafely();
         stopRecording();

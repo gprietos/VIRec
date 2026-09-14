@@ -38,8 +38,16 @@
             android:title="Main Camera"
             app:iconSpaceReserved="false" />
 
+        <SwitchPreference
+            android:defaultValue="false"
+            android:key="prefEnableFrontCamera"
+            android:summaryOff="Off (back camera only)"
+            android:summaryOn="On (records both cameras)"
+            android:title="Enable Front Camera"
+            app:iconSpaceReserved="false" />
+
         <ListPreference
-            android:enabled="true"
+            android:dependency="prefEnableFrontCamera"
             android:key="prefCamera2"
             android:summary="%s"
             android:title="Secondary Camera"
