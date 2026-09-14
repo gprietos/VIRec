@@ -2,18 +2,20 @@ package io.a3dv.VIRec;
 
 import android.content.SharedPreferences;
 import android.graphics.Color;
-import android.net.Uri;
+import android.graphics.SurfaceTexture;
+import android.media.MediaPlayer;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.view.Gravity;
+import android.view.Surface;
+import android.view.TextureView;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.FrameLayout;
 import android.widget.ImageButton;
 import android.widget.SeekBar;
 import android.widget.TextView;
-import android.widget.VideoView;
 
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.preference.PreferenceManager;
@@ -63,9 +65,12 @@ public class RecordingViewerActivity extends AppCompatActivity {
     private List<SensorCsvParser.OrientationSample> orientationSamples;
     private List<SensorCsvParser.GpsSample> gpsSamples;
 
-    // Current rotation (degrees, one of 0/90/180/270) applied to each VideoView via
-    // View#setRotation(). VideoView has no native frame-rotation API, so rotating the whole
-    // View is the pragmatic fix -- see the rotate buttons wired in onCreate.
+    // Current rotation (degrees, one of 0/90/180/270) applied to each TextureView via
+    // View#setRotation() -- see the rotate buttons wired in onCreate. TextureView's content is
+    // a normal hardware-accelerated View (a GL texture drawn through the regular view
+    // hierarchy), so setRotation() genuinely rotates the decoded pixels -- unlike the old
+    // VideoView/SurfaceView setup, whose separate compositor surface bypassed the View
+    // transform pipeline and only resized the bounding box.
     private float mainVideoRotationDeg = 0f;
     private float frontVideoRotationDeg = 0f;
 
@@ -85,13 +90,22 @@ public class RecordingViewerActivity extends AppCompatActivity {
     private Runnable mainProgressRunnable;
     private Runnable frontProgressRunnable;
 
+    // The MediaPlayer driving each TextureView, created in loadVideo() once its video file is
+    // known to exist. TextureView (unlike the old VideoView) has no built-in playback controls
+    // or MediaPlayer lifecycle management, so the app now owns these directly -- all playback
+    // calls (isPlaying/pause/start/seekTo/getDuration/getCurrentPosition) go through them, and
+    // they must be explicitly released (see onDestroy) to avoid leaking native resources. Null
+    // until loadVideo() creates one (session dir missing, or that camera's video file absent).
+    private MediaPlayer mainMediaPlayer;
+    private MediaPlayer frontMediaPlayer;
+
     // --- Chart <-> main video sync (see highlightAllChartsAt/seekMainVideoTo/onMainVideoProgress) ---
     // The shared time origin (same clock as the sensor CSVs) that chart X values are relative
-    // to, and the main VideoView itself, both set once in onCreate so the sync methods (called
+    // to, and the main TextureView itself, both set once in onCreate so the sync methods (called
     // from the chart touch listener and from the main video's progress-polling loop) can reach
     // them without threading extra parameters through.
     private long sharedT0;
-    private VideoView mainVideoView;
+    private TextureView mainVideoView;
     private LineChart[] allCharts;
     private TextView valuesAtTimestampTextView;
     // Captured in setupVideoControls (isMain == true only) so pauseMainVideoIfPlaying() and
@@ -122,7 +136,7 @@ public class RecordingViewerActivity extends AppCompatActivity {
 
         TextView mainVideoLabel = findViewById(R.id.label_video_main);
         FrameLayout mainVideoContainer = findViewById(R.id.video_main_container);
-        VideoView mainVideoView = findViewById(R.id.video_main);
+        TextureView mainVideoView = findViewById(R.id.video_main);
         TextView mainVideoFallback = findViewById(R.id.video_main_fallback);
         ImageButton mainVideoRotateButton = findViewById(R.id.button_rotate_main);
         View mainVideoControls = findViewById(R.id.video_main_controls);
@@ -132,7 +146,7 @@ public class RecordingViewerActivity extends AppCompatActivity {
 
         TextView frontVideoLabel = findViewById(R.id.label_video_front);
         FrameLayout frontVideoContainer = findViewById(R.id.video_front_container);
-        VideoView frontVideoView = findViewById(R.id.video_front);
+        TextureView frontVideoView = findViewById(R.id.video_front);
         TextView frontVideoFallback = findViewById(R.id.video_front_fallback);
         ImageButton frontVideoRotateButton = findViewById(R.id.button_rotate_front);
         View frontVideoControls = findViewById(R.id.video_front_controls);
@@ -154,6 +168,14 @@ public class RecordingViewerActivity extends AppCompatActivity {
         TextView accelFallback = findViewById(R.id.chart_accel_fallback);
         TextView orientationFallback = findViewById(R.id.chart_orientation_fallback);
         TextView gpsFallback = findViewById(R.id.chart_gps_fallback);
+
+        // Chart-wrapping FrameLayouts (chart + overlay unit labels + zoom-reset button) --
+        // hidden/shown as a whole via hideSection/showFallback so overlay children don't linger
+        // visible when there's no data for a section (see those methods' doc).
+        View gyroChartFrame = findViewById(R.id.chart_frame_gyro);
+        View accelChartFrame = findViewById(R.id.chart_frame_accel);
+        View orientationChartFrame = findViewById(R.id.chart_frame_orientation);
+        View gpsChartFrame = findViewById(R.id.chart_frame_gps);
 
         final TextView valuesAtTimestampText = findViewById(R.id.values_at_timestamp_text);
         this.valuesAtTimestampTextView = valuesAtTimestampText;
@@ -184,18 +206,16 @@ public class RecordingViewerActivity extends AppCompatActivity {
 
         setupRotateButton(mainVideoRotateButton, mainVideoView, mainVideoContainer, true);
         setupRotateButton(frontVideoRotateButton, frontVideoView, frontVideoContainer, false);
-        setupVideoControls(mainVideoView, mainPlayPauseButton, mainSeekBar, mainProgressHandler,
-                true);
-        setupVideoControls(frontVideoView, frontPlayPauseButton, frontSeekBar,
-                frontProgressHandler, false);
+        setupVideoControls(mainPlayPauseButton, mainSeekBar, mainProgressHandler, true);
+        setupVideoControls(frontPlayPauseButton, frontSeekBar, frontProgressHandler, false);
 
         if (sessionDir == null) {
             showVideoUnavailable(mainVideoContainer, mainVideoControls, mainVideoFallback);
             showVideoUnavailable(frontVideoContainer, frontVideoControls, frontVideoFallback);
-            showFallback(gyroChart, gyroFallback, "No session directory provided.");
-            showFallback(accelChart, accelFallback, "No session directory provided.");
-            showFallback(orientationChart, orientationFallback, "No session directory provided.");
-            showFallback(gpsChart, gpsFallback, "No session directory provided.");
+            showFallback(gyroChartFrame, gyroFallback, "No session directory provided.");
+            showFallback(accelChartFrame, accelFallback, "No session directory provided.");
+            showFallback(orientationChartFrame, orientationFallback, "No session directory provided.");
+            showFallback(gpsChartFrame, gpsFallback, "No session directory provided.");
             return;
         }
 
@@ -209,11 +229,11 @@ public class RecordingViewerActivity extends AppCompatActivity {
         // Parse every sensor source first (each falling back independently, same messages as
         // before) so a single shared t0 can be computed across all of them before any chart is
         // built.
-        imuSamples = parseImuOrFallback(sessionDir, gyroLabel, gyroChart, gyroFallback,
-                accelLabel, accelChart, accelFallback);
+        imuSamples = parseImuOrFallback(sessionDir, gyroLabel, gyroChartFrame, gyroFallback,
+                accelLabel, accelChartFrame, accelFallback);
         orientationSamples = parseOrientationOrFallback(sessionDir, orientationLabel,
-                orientationChart, orientationFallback);
-        gpsSamples = parseGpsOrFallback(sessionDir, gpsLabel, gpsChart, gpsFallback);
+                orientationChartFrame, orientationFallback);
+        gpsSamples = parseGpsOrFallback(sessionDir, gpsLabel, gpsChartFrame, gpsFallback);
 
         final long t0 = computeSharedT0(imuSamples, orientationSamples, gpsSamples);
         sharedT0 = t0;
@@ -241,6 +261,17 @@ public class RecordingViewerActivity extends AppCompatActivity {
     protected void onDestroy() {
         super.onDestroy();
         stopProgressPolling();
+        // TextureView, unlike the old VideoView, does not own/manage a MediaPlayer internally --
+        // the app created these directly in loadVideo() and must release them here to avoid
+        // leaking native decoder resources.
+        if (mainMediaPlayer != null) {
+            mainMediaPlayer.release();
+            mainMediaPlayer = null;
+        }
+        if (frontMediaPlayer != null) {
+            frontMediaPlayer.release();
+            frontMediaPlayer = null;
+        }
     }
 
     private void stopProgressPolling() {
@@ -253,14 +284,14 @@ public class RecordingViewerActivity extends AppCompatActivity {
     }
 
     /**
-     * Cycles the given VideoView's rotation through 0 -> 90 -> 180 -> 270 -> 0 degrees on every
-     * tap, applied via View#setRotation() since VideoView has no native frame-rotation API, and
-     * recomputes the letterboxed fit for the new angle (see resizeVideoToFit) using the video's
-     * already-known intrinsic dimensions -- no MediaPlayer access needed here. isMain selects
-     * which of the two per-video rotation/intrinsic-size fields this button tracks, so the main
-     * and front camera rotate buttons operate fully independently of one another.
+     * Cycles the given TextureView's rotation through 0 -> 90 -> 180 -> 270 -> 0 degrees on
+     * every tap, applied via View#setRotation(), and recomputes the letterboxed fit for the new
+     * angle (see resizeVideoToFit) using the video's already-known intrinsic dimensions -- no
+     * MediaPlayer access needed here. isMain selects which of the two per-video
+     * rotation/intrinsic-size fields this button tracks, so the main and front camera rotate
+     * buttons operate fully independently of one another.
      */
-    private void setupRotateButton(ImageButton button, final VideoView videoView,
+    private void setupRotateButton(ImageButton button, final TextureView videoView,
                                     final FrameLayout container, final boolean isMain) {
         button.setOnClickListener(v -> {
             float current = isMain ? mainVideoRotationDeg : frontVideoRotationDeg;
@@ -278,7 +309,7 @@ public class RecordingViewerActivity extends AppCompatActivity {
 
     /**
      * Computes the largest size (preserving the video's own aspect ratio) that fits within the
-     * container's current bounds, applies it as the VideoView's LayoutParams centered via
+     * container's current bounds, applies it as the TextureView's LayoutParams centered via
      * Gravity.CENTER, and applies rotationDeg via View#setRotation(). Any space in the container
      * not covered by that box reads as letterbox/pillarbox bars against the container's black
      * background (see video_main_container/video_front_container in the layout).
@@ -295,7 +326,7 @@ public class RecordingViewerActivity extends AppCompatActivity {
      * called from onPrepared before the first frame) -- in that case this defers itself via
      * container.post(...) until it is.
      */
-    private void resizeVideoToFit(final VideoView videoView, final FrameLayout container,
+    private void resizeVideoToFit(final TextureView videoView, final FrameLayout container,
                                    final int videoWidth, final int videoHeight,
                                    final float rotationDeg) {
         if (videoWidth <= 0 || videoHeight <= 0) {
@@ -325,9 +356,24 @@ public class RecordingViewerActivity extends AppCompatActivity {
     }
 
     /**
-     * Wires one VideoView's play/pause button and SeekBar. The SeekBar's progress is kept in
-     * sync with playback via a Handler+Runnable polling loop that reposts itself every ~200ms
-     * only while the video isPlaying() (so it naturally stops reposting the moment playback
+     * Returns whichever of the two per-video MediaPlayer fields isMain selects -- mirrors the
+     * mainProgressRunnable/frontProgressRunnable field-pair pattern used elsewhere in this file.
+     * Null until loadVideo() creates the corresponding MediaPlayer (which hasn't necessarily
+     * happened yet when setupVideoControls() below wires its listeners, since that runs before
+     * the sessionDir-null check and before loadVideo() is called -- so every caller here must
+     * null-check the result).
+     */
+    private MediaPlayer currentMediaPlayer(boolean isMain) {
+        return isMain ? mainMediaPlayer : frontMediaPlayer;
+    }
+
+    /**
+     * Wires one video's play/pause button and SeekBar. Playback itself is controlled through
+     * whichever MediaPlayer currentMediaPlayer(isMain) resolves to at the time of each
+     * interaction (not a parameter captured up front), since this method is called before that
+     * MediaPlayer exists -- see currentMediaPlayer's doc. The SeekBar's progress is kept in sync
+     * with playback via a Handler+Runnable polling loop that reposts itself every ~200ms only
+     * while the video isPlaying() (so it naturally stops reposting the moment playback
      * pauses/stops, no separate "stop polling" call needed there) -- suppressed while the user is
      * actively dragging the thumb (onStartTrackingTouch/onStopTrackingTouch bracket a
      * userSeeking flag) so the drag and the poll loop don't fight over the SeekBar's progress
@@ -336,9 +382,8 @@ public class RecordingViewerActivity extends AppCompatActivity {
      * When isMain is true, each polling tick also calls onMainVideoProgress(...) to sweep the
      * chart crosshair in step with main-camera playback (see "Chart <-> main video sync").
      */
-    private void setupVideoControls(final VideoView videoView, final ImageButton playPauseButton,
-                                     final SeekBar seekBar, final Handler progressHandler,
-                                     final boolean isMain) {
+    private void setupVideoControls(final ImageButton playPauseButton, final SeekBar seekBar,
+                                     final Handler progressHandler, final boolean isMain) {
         if (isMain) {
             mainSeekBar = seekBar;
             mainPlayPauseButton = playPauseButton;
@@ -346,14 +391,18 @@ public class RecordingViewerActivity extends AppCompatActivity {
         final boolean[] userSeeking = {false};
         final Runnable[] progressRunnable = new Runnable[1];
         progressRunnable[0] = () -> {
+            MediaPlayer mp = currentMediaPlayer(isMain);
+            if (mp == null) {
+                return;
+            }
             if (!userSeeking[0]) {
-                int pos = videoView.getCurrentPosition();
+                int pos = mp.getCurrentPosition();
                 seekBar.setProgress(pos);
                 if (isMain) {
                     onMainVideoProgress(pos);
                 }
             }
-            if (videoView.isPlaying()) {
+            if (mp.isPlaying()) {
                 progressHandler.postDelayed(progressRunnable[0], 200);
             }
         };
@@ -364,11 +413,15 @@ public class RecordingViewerActivity extends AppCompatActivity {
         }
 
         playPauseButton.setOnClickListener(v -> {
-            if (videoView.isPlaying()) {
-                videoView.pause();
+            MediaPlayer mp = currentMediaPlayer(isMain);
+            if (mp == null) {
+                return;
+            }
+            if (mp.isPlaying()) {
+                mp.pause();
                 playPauseButton.setImageResource(R.drawable.ic_baseline_play_arrow_24);
             } else {
-                videoView.start();
+                mp.start();
                 playPauseButton.setImageResource(R.drawable.ic_baseline_pause_24);
                 progressHandler.post(progressRunnable[0]);
             }
@@ -387,7 +440,10 @@ public class RecordingViewerActivity extends AppCompatActivity {
             @Override
             public void onStopTrackingTouch(SeekBar seekBar) {
                 userSeeking[0] = false;
-                videoView.seekTo(seekBar.getProgress());
+                MediaPlayer mp = currentMediaPlayer(isMain);
+                if (mp != null) {
+                    mp.seekTo(seekBar.getProgress());
+                }
                 if (isMain) {
                     onMainVideoProgress(seekBar.getProgress());
                 }
@@ -396,7 +452,7 @@ public class RecordingViewerActivity extends AppCompatActivity {
     }
 
     private void loadVideo(File sessionDir, String filename, TextView label,
-                            final FrameLayout container, final VideoView videoView,
+                            final FrameLayout container, final TextureView videoView,
                             TextView fallback, final View controls,
                             final ImageButton playPauseButton, final SeekBar seekBar,
                             final boolean isMain) {
@@ -415,9 +471,29 @@ public class RecordingViewerActivity extends AppCompatActivity {
         container.setVisibility(View.VISIBLE);
         controls.setVisibility(View.VISIBLE);
         fallback.setVisibility(View.GONE);
-        videoView.setVideoURI(Uri.fromFile(video));
 
-        videoView.setOnPreparedListener(mp -> {
+        final MediaPlayer mediaPlayer = new MediaPlayer();
+        if (isMain) {
+            mainMediaPlayer = mediaPlayer;
+        } else {
+            frontMediaPlayer = mediaPlayer;
+        }
+
+        try {
+            mediaPlayer.setDataSource(video.getAbsolutePath());
+        } catch (IOException e) {
+            Timber.e(e, "Failed to set data source for %s", video);
+            showVideoUnavailable(container, controls, fallback);
+            return;
+        }
+
+        mediaPlayer.setOnErrorListener((mp, what, extra) -> {
+            Timber.e("MediaPlayer error for %s: what=%d extra=%d", video, what, extra);
+            showVideoUnavailable(container, controls, fallback);
+            return true;
+        });
+
+        mediaPlayer.setOnPreparedListener(mp -> {
             int videoWidth = mp.getVideoWidth();
             int videoHeight = mp.getVideoHeight();
             if (isMain) {
@@ -428,8 +504,8 @@ public class RecordingViewerActivity extends AppCompatActivity {
                 frontVideoIntrinsicHeight = videoHeight;
             }
             float rotationDeg = isMain ? mainVideoRotationDeg : frontVideoRotationDeg;
-            // onPrepared fires once per setVideoURI call (this app never reloads a video into
-            // the same VideoView), so this naturally applies only on first load -- it can't
+            // onPrepared fires once per loadVideo() call (this app never reloads a video into
+            // the same TextureView), so this naturally applies only on first load -- it can't
             // re-trigger on later frames or clobber a rotation the user later sets via the
             // rotate button. Portrait-shot footage otherwise starts letterboxed to a sliver; default
             // it to landscape display (90 degrees) so the rotate button's next tap then cycles
@@ -444,17 +520,47 @@ public class RecordingViewerActivity extends AppCompatActivity {
             }
             resizeVideoToFit(videoView, container, videoWidth, videoHeight, rotationDeg);
 
-            seekBar.setMax(videoView.getDuration());
-            // VideoView autoplays by default once prepared (its target state defaults to
-            // STATE_PLAYING) -- reflect that in the button and kick off the progress-polling
-            // loop rather than leaving both stuck showing/tracking a paused state.
+            seekBar.setMax(mp.getDuration());
             playPauseButton.setImageResource(R.drawable.ic_baseline_pause_24);
             Runnable runnable = isMain ? mainProgressRunnable : frontProgressRunnable;
             Handler handler = isMain ? mainProgressHandler : frontProgressHandler;
             if (runnable != null) {
                 handler.post(runnable);
             }
+            // Unlike VideoView (which autoplayed once prepared, its target state defaulting to
+            // STATE_PLAYING), a raw MediaPlayer does not -- start it explicitly to preserve the
+            // previous autoplay-on-load behavior.
+            mp.start();
         });
+
+        // TextureView's SurfaceTexture isn't available until the view is attached/laid out.
+        if (videoView.isAvailable()) {
+            mediaPlayer.setSurface(new Surface(videoView.getSurfaceTexture()));
+            mediaPlayer.prepareAsync();
+        } else {
+            videoView.setSurfaceTextureListener(new TextureView.SurfaceTextureListener() {
+                @Override
+                public void onSurfaceTextureAvailable(SurfaceTexture surface, int width,
+                                                        int height) {
+                    mediaPlayer.setSurface(new Surface(surface));
+                    mediaPlayer.prepareAsync();
+                }
+
+                @Override
+                public boolean onSurfaceTextureDestroyed(SurfaceTexture surface) {
+                    return true;
+                }
+
+                @Override
+                public void onSurfaceTextureSizeChanged(SurfaceTexture surface, int width,
+                                                          int height) {
+                }
+
+                @Override
+                public void onSurfaceTextureUpdated(SurfaceTexture surface) {
+                }
+            });
+        }
     }
 
     private static void showVideoUnavailable(ViewGroup container, View controls,
@@ -501,70 +607,70 @@ public class RecordingViewerActivity extends AppCompatActivity {
     }
 
     private List<SensorCsvParser.ImuSample> parseImuOrFallback(
-            File sessionDir, TextView gyroLabel, LineChart gyroChart, TextView gyroFallback,
-            TextView accelLabel, LineChart accelChart, TextView accelFallback) {
+            File sessionDir, TextView gyroLabel, View gyroChartFrame, TextView gyroFallback,
+            TextView accelLabel, View accelChartFrame, TextView accelFallback) {
         File csv = new File(sessionDir, "gyro_accel.csv");
         List<SensorCsvParser.ImuSample> samples;
         try {
             samples = SensorCsvParser.parseImu(csv);
         } catch (SensorCsvParser.Unavailable e) {
-            hideSection(gyroLabel, gyroChart, gyroFallback);
-            hideSection(accelLabel, accelChart, accelFallback);
+            hideSection(gyroLabel, gyroChartFrame, gyroFallback);
+            hideSection(accelLabel, accelChartFrame, accelFallback);
             return null;
         } catch (IOException e) {
             Timber.e(e, "Failed to read %s", csv);
-            showFallback(gyroChart, gyroFallback, "Failed to read gyro_accel.csv");
-            showFallback(accelChart, accelFallback, "Failed to read gyro_accel.csv");
+            showFallback(gyroChartFrame, gyroFallback, "Failed to read gyro_accel.csv");
+            showFallback(accelChartFrame, accelFallback, "Failed to read gyro_accel.csv");
             return null;
         }
 
         if (samples.isEmpty()) {
-            hideSection(gyroLabel, gyroChart, gyroFallback);
-            hideSection(accelLabel, accelChart, accelFallback);
+            hideSection(gyroLabel, gyroChartFrame, gyroFallback);
+            hideSection(accelLabel, accelChartFrame, accelFallback);
             return null;
         }
         return samples;
     }
 
     private List<SensorCsvParser.OrientationSample> parseOrientationOrFallback(
-            File sessionDir, TextView label, LineChart chart, TextView fallback) {
+            File sessionDir, TextView label, View chartFrame, TextView fallback) {
         File csv = new File(sessionDir, "orientation.csv");
         List<SensorCsvParser.OrientationSample> samples;
         try {
             samples = SensorCsvParser.parseOrientation(csv);
         } catch (SensorCsvParser.Unavailable e) {
-            hideSection(label, chart, fallback);
+            hideSection(label, chartFrame, fallback);
             return null;
         } catch (IOException e) {
             Timber.e(e, "Failed to read %s", csv);
-            showFallback(chart, fallback, "Failed to read orientation.csv");
+            showFallback(chartFrame, fallback, "Failed to read orientation.csv");
             return null;
         }
 
         if (samples.isEmpty()) {
-            hideSection(label, chart, fallback);
+            hideSection(label, chartFrame, fallback);
             return null;
         }
         return samples;
     }
 
     private List<SensorCsvParser.GpsSample> parseGpsOrFallback(
-            File sessionDir, TextView label, LineChart chart, TextView fallback) {
+            File sessionDir, TextView label, View chartFrame, TextView fallback) {
         File csv = new File(sessionDir, "location.csv");
         List<SensorCsvParser.GpsSample> samples;
         try {
             samples = SensorCsvParser.parseGps(csv);
         } catch (SensorCsvParser.Unavailable e) {
-            hideSection(label, chart, fallback);
+            hideSection(label, chartFrame, fallback);
             return null;
         } catch (IOException e) {
             Timber.e(e, "Failed to read %s", csv);
-            showFallback(chart, fallback, "Failed to read location.csv");
+            showFallback(chartFrame, fallback, "Failed to read location.csv");
             return null;
         }
 
         if (samples.isEmpty()) {
-            hideSection(label, chart, fallback);
+            hideSection(label, chartFrame, fallback);
             return null;
         }
         return samples;
@@ -758,17 +864,17 @@ public class RecordingViewerActivity extends AppCompatActivity {
      * loop, since that path never seeks the video again.
      */
     private void seekMainVideoTo(float x) {
-        if (recordingStartElapsedNs == null || mainVideoView == null) {
+        if (recordingStartElapsedNs == null || mainMediaPlayer == null) {
             return;
         }
-        int duration = mainVideoView.getDuration();
+        int duration = mainMediaPlayer.getDuration();
         if (duration <= 0) {
             return;
         }
         long selectedTimestampNs = sharedT0 + (long) (x * 1e9);
         long videoPositionMs = (selectedTimestampNs - recordingStartElapsedNs) / 1_000_000L;
         long clamped = Math.max(0L, Math.min(videoPositionMs, (long) duration));
-        mainVideoView.seekTo((int) clamped);
+        mainMediaPlayer.seekTo((int) clamped);
         if (mainSeekBar != null) {
             mainSeekBar.setProgress((int) clamped);
         }
@@ -781,8 +887,8 @@ public class RecordingViewerActivity extends AppCompatActivity {
      * (see onValueSelected/seekMainVideoTo, "Chart <-> main video sync").
      */
     private void pauseMainVideoIfPlaying() {
-        if (mainVideoView != null && mainVideoView.isPlaying()) {
-            mainVideoView.pause();
+        if (mainMediaPlayer != null && mainMediaPlayer.isPlaying()) {
+            mainMediaPlayer.pause();
             if (mainPlayPauseButton != null) {
                 mainPlayPauseButton.setImageResource(R.drawable.ic_baseline_play_arrow_24);
             }
@@ -905,21 +1011,23 @@ public class RecordingViewerActivity extends AppCompatActivity {
         chart.invalidate();
     }
 
-    private static void showFallback(LineChart chart, TextView fallback, String message) {
-        chart.setVisibility(View.GONE);
+    private static void showFallback(View chartContainer, TextView fallback, String message) {
+        chartContainer.setVisibility(View.GONE);
         fallback.setVisibility(View.VISIBLE);
         fallback.setText(message);
     }
 
     /**
-     * Hides an entire section -- label, chart, and fallback text -- for data that was
-     * genuinely never recorded (SensorCsvParser.Unavailable, or an empty sample list), as
-     * opposed to a real IOException reading an existing file (see showFallback, which keeps the
-     * label visible and surfaces the error instead).
+     * Hides an entire section -- label, chart container (and any overlay siblings inside it,
+     * e.g. unit labels/zoom-reset button), and fallback text -- for data that was genuinely
+     * never recorded (SensorCsvParser.Unavailable, or an empty sample list), as opposed to a
+     * real IOException reading an existing file (see showFallback, which keeps the label
+     * visible and surfaces the error instead). chartContainer is the whole chart-wrapping
+     * FrameLayout, not just the LineChart, so overlay children hide/show along with it.
      */
-    private static void hideSection(TextView label, LineChart chart, TextView fallback) {
+    private static void hideSection(TextView label, View chartContainer, TextView fallback) {
         label.setVisibility(View.GONE);
-        chart.setVisibility(View.GONE);
+        chartContainer.setVisibility(View.GONE);
         fallback.setVisibility(View.GONE);
     }
 }

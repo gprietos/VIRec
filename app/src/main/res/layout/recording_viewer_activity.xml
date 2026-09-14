@@ -24,21 +24,11 @@
             android:layout_height="220dp"
             android:background="@android:color/black">
 
-            <VideoView
+            <TextureView
                 android:id="@+id/video_main"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_gravity="center" />
-
-            <ImageButton
-                android:id="@+id/button_rotate_main"
-                android:layout_width="40dp"
-                android:layout_height="40dp"
-                android:layout_gravity="top|end"
-                android:layout_margin="4dp"
-                android:background="?attr/selectableItemBackgroundBorderless"
-                android:contentDescription="@string/rotate_video_content_description"
-                android:src="@drawable/ic_baseline_rotate_90_24" />
 
         </FrameLayout>
 
@@ -52,11 +42,20 @@
 
             <ImageButton
                 android:id="@+id/button_playpause_main"
-                android:layout_width="40dp"
-                android:layout_height="40dp"
+                android:layout_width="32dp"
+                android:layout_height="32dp"
                 android:background="?attr/selectableItemBackgroundBorderless"
                 android:contentDescription="@string/play_pause_content_description"
                 android:src="@drawable/ic_baseline_play_arrow_24" />
+
+            <ImageButton
+                android:id="@+id/button_rotate_main"
+                android:layout_width="32dp"
+                android:layout_height="32dp"
+                android:layout_marginStart="4dp"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="@string/rotate_video_content_description"
+                android:src="@drawable/ic_baseline_rotate_90_24" />
 
             <SeekBar
                 android:id="@+id/seekbar_main"
@@ -91,21 +90,11 @@
             android:layout_height="220dp"
             android:background="@android:color/black">
 
-            <VideoView
+            <TextureView
                 android:id="@+id/video_front"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_gravity="center" />
-
-            <ImageButton
-                android:id="@+id/button_rotate_front"
-                android:layout_width="40dp"
-                android:layout_height="40dp"
-                android:layout_gravity="top|end"
-                android:layout_margin="4dp"
-                android:background="?attr/selectableItemBackgroundBorderless"
-                android:contentDescription="@string/rotate_video_content_description"
-                android:src="@drawable/ic_baseline_rotate_90_24" />
 
         </FrameLayout>
 
@@ -119,11 +108,20 @@
 
             <ImageButton
                 android:id="@+id/button_playpause_front"
-                android:layout_width="40dp"
-                android:layout_height="40dp"
+                android:layout_width="32dp"
+                android:layout_height="32dp"
                 android:background="?attr/selectableItemBackgroundBorderless"
                 android:contentDescription="@string/play_pause_content_description"
                 android:src="@drawable/ic_baseline_play_arrow_24" />
+
+            <ImageButton
+                android:id="@+id/button_rotate_front"
+                android:layout_width="32dp"
+                android:layout_height="32dp"
+                android:layout_marginStart="4dp"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="@string/rotate_video_content_description"
+                android:src="@drawable/ic_baseline_rotate_90_24" />
 
             <SeekBar
                 android:id="@+id/seekbar_front"
@@ -166,6 +164,7 @@
             android:textStyle="bold" />
 
         <FrameLayout
+            android:id="@+id/chart_frame_gyro"
             android:layout_width="match_parent"
             android:layout_height="250dp">
 
@@ -224,6 +223,7 @@
             android:textStyle="bold" />
 
         <FrameLayout
+            android:id="@+id/chart_frame_accel"
             android:layout_width="match_parent"
             android:layout_height="250dp">
 
@@ -282,6 +282,7 @@
             android:textStyle="bold" />
 
         <FrameLayout
+            android:id="@+id/chart_frame_orientation"
             android:layout_width="match_parent"
             android:layout_height="250dp">
 
@@ -340,6 +341,7 @@
             android:textStyle="bold" />
 
         <FrameLayout
+            android:id="@+id/chart_frame_gps"
             android:layout_width="match_parent"
             android:layout_height="250dp">
 
@@ -349,12 +351,23 @@
                 android:layout_height="match_parent" />
 
             <TextView
-                android:id="@+id/label_gps_yaxis_unit"
+                android:id="@+id/label_gps_left_unit"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_gravity="top|start"
                 android:layout_margin="4dp"
-                android:text="m / m/s"
+                android:text="m"
+                android:textColor="?android:attr/textColorSecondary"
+                android:textSize="11sp" />
+
+            <TextView
+                android:id="@+id/label_gps_right_unit"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="top|end"
+                android:layout_marginTop="36dp"
+                android:layout_marginEnd="4dp"
+                android:text="m/s"
                 android:textColor="?android:attr/textColorSecondary"
                 android:textSize="11sp" />
 

@@ -551,8 +551,10 @@ public class CameraActivity extends CameraActivityBase
      * miscalculated position, it just reorients in place at a fixed corner. Purely cosmetic --
      * does not touch the portrait lock or the camera preview/surface logic.
      *
-     * corner mapping unverified on-device; if a block lands in the wrong corner, swap the
-     * bucket 90 and bucket 270 rows (top+end <-> bottom+start).
+     * Corner mapping: bucket 0 -> top-left, bucket 90 -> bottom-left, bucket 180 -> bottom-right,
+     * bucket 270 -> top-right. The bucket 90/270 rows were swapped from the first attempt after
+     * on-device testing showed the block landing in the mirror-wrong corner; this mapping itself
+     * is still not independently on-device-verified.
      */
     private void relocateOverlayContainer(int compensated) {
         if (mOverlayInfoContainer == null) {
@@ -575,16 +577,16 @@ public class CameraActivity extends CameraActivityBase
             params.removeRule(RelativeLayout.ALIGN_PARENT_END);
             switch (bucket) {
                 case 90:
-                    params.addRule(RelativeLayout.ALIGN_PARENT_TOP, RelativeLayout.TRUE);
-                    params.addRule(RelativeLayout.ALIGN_PARENT_END, RelativeLayout.TRUE);
+                    params.addRule(RelativeLayout.ALIGN_PARENT_BOTTOM, RelativeLayout.TRUE);
+                    params.addRule(RelativeLayout.ALIGN_PARENT_START, RelativeLayout.TRUE);
                     break;
                 case 180:
                     params.addRule(RelativeLayout.ALIGN_PARENT_BOTTOM, RelativeLayout.TRUE);
                     params.addRule(RelativeLayout.ALIGN_PARENT_END, RelativeLayout.TRUE);
                     break;
                 case 270:
-                    params.addRule(RelativeLayout.ALIGN_PARENT_BOTTOM, RelativeLayout.TRUE);
-                    params.addRule(RelativeLayout.ALIGN_PARENT_START, RelativeLayout.TRUE);
+                    params.addRule(RelativeLayout.ALIGN_PARENT_TOP, RelativeLayout.TRUE);
+                    params.addRule(RelativeLayout.ALIGN_PARENT_END, RelativeLayout.TRUE);
                     break;
                 case 0:
                 default:
