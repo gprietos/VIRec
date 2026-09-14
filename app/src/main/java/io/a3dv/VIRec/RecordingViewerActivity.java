@@ -1,5 +1,6 @@
 package io.a3dv.VIRec;
 
+import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Bundle;
@@ -15,6 +16,7 @@ import android.widget.TextView;
 import android.widget.VideoView;
 
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.preference.PreferenceManager;
 
 import com.github.mikephil.charting.charts.LineChart;
 import com.github.mikephil.charting.components.XAxis;
@@ -92,6 +94,14 @@ public class RecordingViewerActivity extends AppCompatActivity {
     private VideoView mainVideoView;
     private LineChart[] allCharts;
     private TextView valuesAtTimestampTextView;
+    // Captured in setupVideoControls (isMain == true only) so pauseMainVideoIfPlaying() and
+    // seekMainVideoTo() can reflect a chart-driven pause/seek in the main video's own seek bar
+    // and play/pause button -- see "Chart <-> main video sync".
+    private SeekBar mainSeekBar;
+    private ImageButton mainPlayPauseButton;
+    // Set once in onCreate from prefOrientationUnits (display-only -- orientation.csv itself is
+    // always written/parsed in degrees, see buildOrientationChart/buildValuesAtTimestampText).
+    private boolean useRadians;
     // elapsedRealtimeNanos() at the start of recording, parsed from edge_epochs.txt -- the
     // reference point that converts between a chart's "seconds since sharedT0" X value and the
     // main video's playback position in milliseconds. Null if the file is missing, empty, or
@@ -102,6 +112,9 @@ public class RecordingViewerActivity extends AppCompatActivity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.recording_viewer_activity);
+
+        SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(this);
+        useRadians = "rad".equals(prefs.getString("prefOrientationUnits", "deg"));
 
         String sessionDirPath = getIntent().getStringExtra(
                 RecordingsListActivity.EXTRA_SESSION_DIR);
@@ -144,6 +157,30 @@ public class RecordingViewerActivity extends AppCompatActivity {
 
         final TextView valuesAtTimestampText = findViewById(R.id.values_at_timestamp_text);
         this.valuesAtTimestampTextView = valuesAtTimestampText;
+
+        TextView orientationUnitLabel = findViewById(R.id.label_orientation_unit);
+        orientationUnitLabel.setText(useRadians ? "rad" : "deg");
+
+        ImageButton zoomResetGyroButton = findViewById(R.id.button_zoom_reset_gyro);
+        ImageButton zoomResetAccelButton = findViewById(R.id.button_zoom_reset_accel);
+        ImageButton zoomResetOrientationButton = findViewById(R.id.button_zoom_reset_orientation);
+        ImageButton zoomResetGpsButton = findViewById(R.id.button_zoom_reset_gps);
+        zoomResetGyroButton.setOnClickListener(v -> {
+            gyroChart.fitScreen();
+            gyroChart.invalidate();
+        });
+        zoomResetAccelButton.setOnClickListener(v -> {
+            accelChart.fitScreen();
+            accelChart.invalidate();
+        });
+        zoomResetOrientationButton.setOnClickListener(v -> {
+            orientationChart.fitScreen();
+            orientationChart.invalidate();
+        });
+        zoomResetGpsButton.setOnClickListener(v -> {
+            gpsChart.fitScreen();
+            gpsChart.invalidate();
+        });
 
         setupRotateButton(mainVideoRotateButton, mainVideoView, mainVideoContainer, true);
         setupRotateButton(frontVideoRotateButton, frontVideoView, frontVideoContainer, false);
@@ -302,6 +339,10 @@ public class RecordingViewerActivity extends AppCompatActivity {
     private void setupVideoControls(final VideoView videoView, final ImageButton playPauseButton,
                                      final SeekBar seekBar, final Handler progressHandler,
                                      final boolean isMain) {
+        if (isMain) {
+            mainSeekBar = seekBar;
+            mainPlayPauseButton = playPauseButton;
+        }
         final boolean[] userSeeking = {false};
         final Runnable[] progressRunnable = new Runnable[1];
         progressRunnable[0] = () -> {
@@ -347,6 +388,9 @@ public class RecordingViewerActivity extends AppCompatActivity {
             public void onStopTrackingTouch(SeekBar seekBar) {
                 userSeeking[0] = false;
                 videoView.seekTo(seekBar.getProgress());
+                if (isMain) {
+                    onMainVideoProgress(seekBar.getProgress());
+                }
             }
         });
     }
@@ -384,6 +428,20 @@ public class RecordingViewerActivity extends AppCompatActivity {
                 frontVideoIntrinsicHeight = videoHeight;
             }
             float rotationDeg = isMain ? mainVideoRotationDeg : frontVideoRotationDeg;
+            // onPrepared fires once per setVideoURI call (this app never reloads a video into
+            // the same VideoView), so this naturally applies only on first load -- it can't
+            // re-trigger on later frames or clobber a rotation the user later sets via the
+            // rotate button. Portrait-shot footage otherwise starts letterboxed to a sliver; default
+            // it to landscape display (90 degrees) so the rotate button's next tap then cycles
+            // onward from 90 instead of 0.
+            if (videoHeight > videoWidth) {
+                rotationDeg = 90f;
+            }
+            if (isMain) {
+                mainVideoRotationDeg = rotationDeg;
+            } else {
+                frontVideoRotationDeg = rotationDeg;
+            }
             resizeVideoToFit(videoView, container, videoWidth, videoHeight, rotationDeg);
 
             seekBar.setMax(videoView.getDuration());
@@ -577,9 +635,12 @@ public class RecordingViewerActivity extends AppCompatActivity {
         List<Entry> roll = new ArrayList<>();
         for (SensorCsvParser.OrientationSample s : samples) {
             float x = secondsSince(t0, s.t);
-            yaw.add(new Entry(x, (float) s.yaw));
-            pitch.add(new Entry(x, (float) s.pitch));
-            roll.add(new Entry(x, (float) s.roll));
+            float yawVal = useRadians ? (float) Math.toRadians(s.yaw) : (float) s.yaw;
+            float pitchVal = useRadians ? (float) Math.toRadians(s.pitch) : (float) s.pitch;
+            float rollVal = useRadians ? (float) Math.toRadians(s.roll) : (float) s.roll;
+            yaw.add(new Entry(x, yawVal));
+            pitch.add(new Entry(x, pitchVal));
+            roll.add(new Entry(x, rollVal));
         }
 
         setLineData(chart,
@@ -643,6 +704,7 @@ public class RecordingViewerActivity extends AppCompatActivity {
             public void onValueSelected(Entry e, Highlight h) {
                 float x = h.getX();
                 highlightAllChartsAt(x);
+                pauseMainVideoIfPlaying();
                 seekMainVideoTo(x);
             }
 
@@ -707,6 +769,25 @@ public class RecordingViewerActivity extends AppCompatActivity {
         long videoPositionMs = (selectedTimestampNs - recordingStartElapsedNs) / 1_000_000L;
         long clamped = Math.max(0L, Math.min(videoPositionMs, (long) duration));
         mainVideoView.seekTo((int) clamped);
+        if (mainSeekBar != null) {
+            mainSeekBar.setProgress((int) clamped);
+        }
+    }
+
+    /**
+     * Pauses the main video (and reflects that in its own play/pause button and progress-polling
+     * loop) if it's currently playing -- called just before a chart touch seeks it, so scrubbing
+     * a chart while the video is playing doesn't leave it running past the newly-selected instant
+     * (see onValueSelected/seekMainVideoTo, "Chart <-> main video sync").
+     */
+    private void pauseMainVideoIfPlaying() {
+        if (mainVideoView != null && mainVideoView.isPlaying()) {
+            mainVideoView.pause();
+            if (mainPlayPauseButton != null) {
+                mainPlayPauseButton.setImageResource(R.drawable.ic_baseline_play_arrow_24);
+            }
+            mainProgressHandler.removeCallbacks(mainProgressRunnable);
+        }
     }
 
     /**
@@ -739,9 +820,13 @@ public class RecordingViewerActivity extends AppCompatActivity {
 
         SensorCsvParser.OrientationSample orientation = findNearestOrientation(t0, x);
         if (orientation != null) {
+            double yawVal = useRadians ? Math.toRadians(orientation.yaw) : orientation.yaw;
+            double pitchVal = useRadians ? Math.toRadians(orientation.pitch) : orientation.pitch;
+            double rollVal = useRadians ? Math.toRadians(orientation.roll) : orientation.roll;
+            String unit = useRadians ? "rad" : "deg";
             sb.append(String.format(Locale.US,
-                    "\nOrientation (deg): yaw=%.2f  pitch=%.2f  roll=%.2f",
-                    orientation.yaw, orientation.pitch, orientation.roll));
+                    "\nOrientation (%s): yaw=%.2f  pitch=%.2f  roll=%.2f",
+                    unit, yawVal, pitchVal, rollVal));
         }
 
         SensorCsvParser.GpsSample gps = findNearestGps(t0, x);

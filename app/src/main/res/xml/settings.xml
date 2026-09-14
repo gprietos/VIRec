@@ -118,5 +118,14 @@
             android:title="Hide Overlay Info"
             app:iconSpaceReserved="false" />
 
+        <ListPreference
+            android:defaultValue="deg"
+            android:entries="@array/orientationUnits"
+            android:entryValues="@array/orientationUnitsValues"
+            android:key="prefOrientationUnits"
+            android:summary="%s"
+            android:title="Orientation Units"
+            app:iconSpaceReserved="false" />
+
     </PreferenceCategory>
 </PreferenceScreen>

@@ -21,12 +21,14 @@ import android.view.MenuItem;
 import android.view.OrientationEventListener;
 import android.view.Surface;
 import android.view.View;
+import android.view.ViewGroup;
 import android.view.WindowManager;
 import android.widget.AdapterView;
 import android.widget.AdapterView.OnItemSelectedListener;
 import android.widget.ArrayAdapter;
 import android.widget.ImageButton;
 import android.widget.PopupMenu;
+import android.widget.RelativeLayout;
 import android.widget.Spinner;
 import android.widget.TextView;
 
@@ -542,13 +544,15 @@ public class CameraActivity extends CameraActivityBase
     }
 
     /**
-     * Rotates the whole overlay info block as a single unit to the given compensated angle,
-     * pivoting about the screen/parent's true center (expressed in the container's own local
-     * coordinates). Because the container starts life pinned to the top-left corner, rotating
-     * it about the screen center both reorients its text AND relocates the whole block to the
-     * mirror corner (e.g. top-right when the phone is rotated 90 degrees) as a natural side
-     * effect of the rotation -- no separate translation step needed. Purely cosmetic -- does
-     * not touch the portrait lock or the camera preview/surface logic.
+     * Relocates the whole overlay info block to the parent corner matching the current rotation
+     * bucket, then rotates it in place about its own (default) pivot to the given compensated
+     * angle. Re-anchoring via RelativeLayout rules instead of pivoting about the parent's center
+     * is bounded by construction -- a block rotating about its own center never flies off to a
+     * miscalculated position, it just reorients in place at a fixed corner. Purely cosmetic --
+     * does not touch the portrait lock or the camera preview/surface logic.
+     *
+     * corner mapping unverified on-device; if a block lands in the wrong corner, swap the
+     * bucket 90 and bucket 270 rows (top+end <-> bottom+start).
      */
     private void relocateOverlayContainer(int compensated) {
         if (mOverlayInfoContainer == null) {
@@ -558,10 +562,39 @@ public class CameraActivity extends CameraActivityBase
         if (parent == null || parent.getWidth() == 0 || parent.getHeight() == 0) {
             return;
         }
-        float pivotX = parent.getWidth() / 2f - mOverlayInfoContainer.getLeft();
-        float pivotY = parent.getHeight() / 2f - mOverlayInfoContainer.getTop();
-        mOverlayInfoContainer.setPivotX(pivotX);
-        mOverlayInfoContainer.setPivotY(pivotY);
+        // compensated = (360 - bucket) % 360 is its own inverse for {0, 90, 180, 270}, so this
+        // recovers the original bucket without changing the OrientationEventListener call site.
+        int bucket = (360 - compensated) % 360;
+
+        ViewGroup.LayoutParams rawParams = mOverlayInfoContainer.getLayoutParams();
+        if (rawParams instanceof RelativeLayout.LayoutParams) {
+            RelativeLayout.LayoutParams params = (RelativeLayout.LayoutParams) rawParams;
+            params.removeRule(RelativeLayout.ALIGN_PARENT_TOP);
+            params.removeRule(RelativeLayout.ALIGN_PARENT_BOTTOM);
+            params.removeRule(RelativeLayout.ALIGN_PARENT_START);
+            params.removeRule(RelativeLayout.ALIGN_PARENT_END);
+            switch (bucket) {
+                case 90:
+                    params.addRule(RelativeLayout.ALIGN_PARENT_TOP, RelativeLayout.TRUE);
+                    params.addRule(RelativeLayout.ALIGN_PARENT_END, RelativeLayout.TRUE);
+                    break;
+                case 180:
+                    params.addRule(RelativeLayout.ALIGN_PARENT_BOTTOM, RelativeLayout.TRUE);
+                    params.addRule(RelativeLayout.ALIGN_PARENT_END, RelativeLayout.TRUE);
+                    break;
+                case 270:
+                    params.addRule(RelativeLayout.ALIGN_PARENT_BOTTOM, RelativeLayout.TRUE);
+                    params.addRule(RelativeLayout.ALIGN_PARENT_START, RelativeLayout.TRUE);
+                    break;
+                case 0:
+                default:
+                    params.addRule(RelativeLayout.ALIGN_PARENT_TOP, RelativeLayout.TRUE);
+                    params.addRule(RelativeLayout.ALIGN_PARENT_START, RelativeLayout.TRUE);
+                    break;
+            }
+            mOverlayInfoContainer.setLayoutParams(params);
+        }
+
         mOverlayInfoContainer.animate().rotation(compensated).setDuration(200).start();
     }
 

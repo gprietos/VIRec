@@ -13,4 +13,14 @@
         <item>2</item>
         <item>3</item>
     </string-array>
+
+    <string-array name="orientationUnits">
+        <item>Degrees</item>
+        <item>Radians</item>
+    </string-array>
+
+    <string-array name="orientationUnitsValues">
+        <item>deg</item>
+        <item>rad</item>
+    </string-array>
 </resources>

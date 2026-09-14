@@ -161,14 +161,50 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="@dimen/text_margin"
-            android:text="Gyroscope (rad/s)"
+            android:text="Gyroscope"
             android:textAppearance="?attr/textAppearanceListItem"
             android:textStyle="bold" />
 
-        <com.github.mikephil.charting.charts.LineChart
-            android:id="@+id/chart_gyro"
+        <FrameLayout
             android:layout_width="match_parent"
-            android:layout_height="250dp" />
+            android:layout_height="250dp">
+
+            <com.github.mikephil.charting.charts.LineChart
+                android:id="@+id/chart_gyro"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent" />
+
+            <TextView
+                android:id="@+id/label_gyro_yaxis_unit"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="top|start"
+                android:layout_margin="4dp"
+                android:text="rad/s"
+                android:textColor="?android:attr/textColorSecondary"
+                android:textSize="11sp" />
+
+            <TextView
+                android:id="@+id/label_gyro_xaxis_unit"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="bottom|end"
+                android:layout_margin="4dp"
+                android:text="s"
+                android:textColor="?android:attr/textColorSecondary"
+                android:textSize="11sp" />
+
+            <ImageButton
+                android:id="@+id/button_zoom_reset_gyro"
+                android:layout_width="28dp"
+                android:layout_height="28dp"
+                android:layout_gravity="top|end"
+                android:layout_margin="4dp"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="Reset chart zoom"
+                android:src="@drawable/ic_baseline_fit_screen_24" />
+
+        </FrameLayout>
 
         <TextView
             android:id="@+id/chart_gyro_fallback"
@@ -183,14 +219,50 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="@dimen/text_margin"
-            android:text="Accelerometer (m/s^2)"
+            android:text="Accelerometer"
             android:textAppearance="?attr/textAppearanceListItem"
             android:textStyle="bold" />
 
-        <com.github.mikephil.charting.charts.LineChart
-            android:id="@+id/chart_accel"
+        <FrameLayout
             android:layout_width="match_parent"
-            android:layout_height="250dp" />
+            android:layout_height="250dp">
+
+            <com.github.mikephil.charting.charts.LineChart
+                android:id="@+id/chart_accel"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent" />
+
+            <TextView
+                android:id="@+id/label_accel_yaxis_unit"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="top|start"
+                android:layout_margin="4dp"
+                android:text="m/s²"
+                android:textColor="?android:attr/textColorSecondary"
+                android:textSize="11sp" />
+
+            <TextView
+                android:id="@+id/label_accel_xaxis_unit"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="bottom|end"
+                android:layout_margin="4dp"
+                android:text="s"
+                android:textColor="?android:attr/textColorSecondary"
+                android:textSize="11sp" />
+
+            <ImageButton
+                android:id="@+id/button_zoom_reset_accel"
+                android:layout_width="28dp"
+                android:layout_height="28dp"
+                android:layout_gravity="top|end"
+                android:layout_margin="4dp"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="Reset chart zoom"
+                android:src="@drawable/ic_baseline_fit_screen_24" />
+
+        </FrameLayout>
 
         <TextView
             android:id="@+id/chart_accel_fallback"
@@ -205,14 +277,50 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="@dimen/text_margin"
-            android:text="Orientation (deg)"
+            android:text="Orientation"
             android:textAppearance="?attr/textAppearanceListItem"
             android:textStyle="bold" />
 
-        <com.github.mikephil.charting.charts.LineChart
-            android:id="@+id/chart_orientation"
+        <FrameLayout
             android:layout_width="match_parent"
-            android:layout_height="250dp" />
+            android:layout_height="250dp">
+
+            <com.github.mikephil.charting.charts.LineChart
+                android:id="@+id/chart_orientation"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent" />
+
+            <TextView
+                android:id="@+id/label_orientation_unit"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="top|start"
+                android:layout_margin="4dp"
+                android:text="deg"
+                android:textColor="?android:attr/textColorSecondary"
+                android:textSize="11sp" />
+
+            <TextView
+                android:id="@+id/label_orientation_xaxis_unit"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="bottom|end"
+                android:layout_margin="4dp"
+                android:text="s"
+                android:textColor="?android:attr/textColorSecondary"
+                android:textSize="11sp" />
+
+            <ImageButton
+                android:id="@+id/button_zoom_reset_orientation"
+                android:layout_width="28dp"
+                android:layout_height="28dp"
+                android:layout_gravity="top|end"
+                android:layout_margin="4dp"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="Reset chart zoom"
+                android:src="@drawable/ic_baseline_fit_screen_24" />
+
+        </FrameLayout>
 
         <TextView
             android:id="@+id/chart_orientation_fallback"
@@ -227,14 +335,50 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="@dimen/text_margin"
-            android:text="GPS (altitude m / speed m/s)"
+            android:text="GPS"
             android:textAppearance="?attr/textAppearanceListItem"
             android:textStyle="bold" />
 
-        <com.github.mikephil.charting.charts.LineChart
-            android:id="@+id/chart_gps"
+        <FrameLayout
             android:layout_width="match_parent"
-            android:layout_height="250dp" />
+            android:layout_height="250dp">
+
+            <com.github.mikephil.charting.charts.LineChart
+                android:id="@+id/chart_gps"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent" />
+
+            <TextView
+                android:id="@+id/label_gps_yaxis_unit"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="top|start"
+                android:layout_margin="4dp"
+                android:text="m / m/s"
+                android:textColor="?android:attr/textColorSecondary"
+                android:textSize="11sp" />
+
+            <TextView
+                android:id="@+id/label_gps_xaxis_unit"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="bottom|end"
+                android:layout_margin="4dp"
+                android:text="s"
+                android:textColor="?android:attr/textColorSecondary"
+                android:textSize="11sp" />
+
+            <ImageButton
+                android:id="@+id/button_zoom_reset_gps"
+                android:layout_width="28dp"
+                android:layout_height="28dp"
+                android:layout_gravity="top|end"
+                android:layout_margin="4dp"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="Reset chart zoom"
+                android:src="@drawable/ic_baseline_fit_screen_24" />
+
+        </FrameLayout>
 
         <TextView
             android:id="@+id/chart_gps_fallback"
