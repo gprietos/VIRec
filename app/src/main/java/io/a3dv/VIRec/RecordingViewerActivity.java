@@ -3,11 +3,14 @@ package io.a3dv.VIRec;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.FrameLayout;
 import android.widget.ImageButton;
-import android.widget.MediaController;
+import android.widget.SeekBar;
 import android.widget.TextView;
 import android.widget.VideoView;
 
@@ -23,7 +26,9 @@ import com.github.mikephil.charting.highlight.Highlight;
 import com.github.mikephil.charting.interfaces.datasets.ILineDataSet;
 import com.github.mikephil.charting.listener.OnChartValueSelectedListener;
 
+import java.io.BufferedReader;
 import java.io.File;
+import java.io.FileReader;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
@@ -43,7 +48,9 @@ import timber.log.Timber;
  * All 4 charts share a single time origin (the earliest first-sample timestamp across whichever
  * of the 3 sensor sources are actually available), so touching any chart can look up the nearest
  * sample in every source at that same instant and cross-highlight all charts (all datasets, not
- * just one) at once.
+ * just one) at once. Touching a chart also seeks the MAIN camera video to the matching instant,
+ * and playing the main video sweeps the same crosshair across all 4 charts in step -- see
+ * "Chart <-> main video sync" below.
  */
 public class RecordingViewerActivity extends AppCompatActivity {
 
@@ -60,6 +67,37 @@ public class RecordingViewerActivity extends AppCompatActivity {
     private float mainVideoRotationDeg = 0f;
     private float frontVideoRotationDeg = 0f;
 
+    // Each video's intrinsic (unrotated) pixel dimensions, captured once in its
+    // setOnPreparedListener callback -- stored so the rotate button can recompute the
+    // letterboxed fit (see resizeVideoToFit) without needing the MediaPlayer again.
+    private int mainVideoIntrinsicWidth;
+    private int mainVideoIntrinsicHeight;
+    private int frontVideoIntrinsicWidth;
+    private int frontVideoIntrinsicHeight;
+
+    // Progress-polling Handler/Runnable pair per video (see setupVideoControls), stopped in
+    // onPause()/onDestroy() via removeCallbacks to avoid leaking a repeating post-to-self after
+    // the Activity goes away.
+    private final Handler mainProgressHandler = new Handler(Looper.getMainLooper());
+    private final Handler frontProgressHandler = new Handler(Looper.getMainLooper());
+    private Runnable mainProgressRunnable;
+    private Runnable frontProgressRunnable;
+
+    // --- Chart <-> main video sync (see highlightAllChartsAt/seekMainVideoTo/onMainVideoProgress) ---
+    // The shared time origin (same clock as the sensor CSVs) that chart X values are relative
+    // to, and the main VideoView itself, both set once in onCreate so the sync methods (called
+    // from the chart touch listener and from the main video's progress-polling loop) can reach
+    // them without threading extra parameters through.
+    private long sharedT0;
+    private VideoView mainVideoView;
+    private LineChart[] allCharts;
+    private TextView valuesAtTimestampTextView;
+    // elapsedRealtimeNanos() at the start of recording, parsed from edge_epochs.txt -- the
+    // reference point that converts between a chart's "seconds since sharedT0" X value and the
+    // main video's playback position in milliseconds. Null if the file is missing, empty, or
+    // fails to parse, in which case sync is silently disabled (see parseRecordingStartElapsedNs).
+    private Long recordingStartElapsedNs;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -74,12 +112,19 @@ public class RecordingViewerActivity extends AppCompatActivity {
         VideoView mainVideoView = findViewById(R.id.video_main);
         TextView mainVideoFallback = findViewById(R.id.video_main_fallback);
         ImageButton mainVideoRotateButton = findViewById(R.id.button_rotate_main);
+        View mainVideoControls = findViewById(R.id.video_main_controls);
+        ImageButton mainPlayPauseButton = findViewById(R.id.button_playpause_main);
+        SeekBar mainSeekBar = findViewById(R.id.seekbar_main);
+        this.mainVideoView = mainVideoView;
 
         TextView frontVideoLabel = findViewById(R.id.label_video_front);
         FrameLayout frontVideoContainer = findViewById(R.id.video_front_container);
         VideoView frontVideoView = findViewById(R.id.video_front);
         TextView frontVideoFallback = findViewById(R.id.video_front_fallback);
         ImageButton frontVideoRotateButton = findViewById(R.id.button_rotate_front);
+        View frontVideoControls = findViewById(R.id.video_front_controls);
+        ImageButton frontPlayPauseButton = findViewById(R.id.button_playpause_front);
+        SeekBar frontSeekBar = findViewById(R.id.seekbar_front);
 
         TextView gyroLabel = findViewById(R.id.label_chart_gyro);
         TextView accelLabel = findViewById(R.id.label_chart_accel);
@@ -90,6 +135,7 @@ public class RecordingViewerActivity extends AppCompatActivity {
         final LineChart accelChart = findViewById(R.id.chart_accel);
         final LineChart orientationChart = findViewById(R.id.chart_orientation);
         final LineChart gpsChart = findViewById(R.id.chart_gps);
+        this.allCharts = new LineChart[]{gyroChart, accelChart, orientationChart, gpsChart};
 
         TextView gyroFallback = findViewById(R.id.chart_gyro_fallback);
         TextView accelFallback = findViewById(R.id.chart_accel_fallback);
@@ -97,20 +143,18 @@ public class RecordingViewerActivity extends AppCompatActivity {
         TextView gpsFallback = findViewById(R.id.chart_gps_fallback);
 
         final TextView valuesAtTimestampText = findViewById(R.id.values_at_timestamp_text);
+        this.valuesAtTimestampTextView = valuesAtTimestampText;
 
-        // Wired unconditionally, regardless of whether each chart ends up with data -- an empty
-        // chart never gets a highlight, so the marker never has a reason to draw on it.
-        gyroChart.setMarker(new ChartValueMarkerView(this, R.layout.chart_value_marker));
-        accelChart.setMarker(new ChartValueMarkerView(this, R.layout.chart_value_marker));
-        orientationChart.setMarker(new ChartValueMarkerView(this, R.layout.chart_value_marker));
-        gpsChart.setMarker(new ChartValueMarkerView(this, R.layout.chart_value_marker));
-
-        setupRotateButton(mainVideoRotateButton, mainVideoView, true);
-        setupRotateButton(frontVideoRotateButton, frontVideoView, false);
+        setupRotateButton(mainVideoRotateButton, mainVideoView, mainVideoContainer, true);
+        setupRotateButton(frontVideoRotateButton, frontVideoView, frontVideoContainer, false);
+        setupVideoControls(mainVideoView, mainPlayPauseButton, mainSeekBar, mainProgressHandler,
+                true);
+        setupVideoControls(frontVideoView, frontPlayPauseButton, frontSeekBar,
+                frontProgressHandler, false);
 
         if (sessionDir == null) {
-            showVideoUnavailable(mainVideoContainer, mainVideoFallback);
-            showVideoUnavailable(frontVideoContainer, frontVideoFallback);
+            showVideoUnavailable(mainVideoContainer, mainVideoControls, mainVideoFallback);
+            showVideoUnavailable(frontVideoContainer, frontVideoControls, frontVideoFallback);
             showFallback(gyroChart, gyroFallback, "No session directory provided.");
             showFallback(accelChart, accelFallback, "No session directory provided.");
             showFallback(orientationChart, orientationFallback, "No session directory provided.");
@@ -118,10 +162,12 @@ public class RecordingViewerActivity extends AppCompatActivity {
             return;
         }
 
+        recordingStartElapsedNs = parseRecordingStartElapsedNs(sessionDir);
+
         loadVideo(sessionDir, "movie.mp4", mainVideoLabel, mainVideoContainer, mainVideoView,
-                mainVideoFallback);
+                mainVideoFallback, mainVideoControls, mainPlayPauseButton, mainSeekBar, true);
         loadVideo(sessionDir, "movie2.mp4", frontVideoLabel, frontVideoContainer, frontVideoView,
-                frontVideoFallback);
+                frontVideoFallback, frontVideoControls, frontPlayPauseButton, frontSeekBar, false);
 
         // Parse every sensor source first (each falling back independently, same messages as
         // before) so a single shared t0 can be computed across all of them before any chart is
@@ -133,6 +179,7 @@ public class RecordingViewerActivity extends AppCompatActivity {
         gpsSamples = parseGpsOrFallback(sessionDir, gpsLabel, gpsChart, gpsFallback);
 
         final long t0 = computeSharedT0(imuSamples, orientationSamples, gpsSamples);
+        sharedT0 = t0;
 
         if (imuSamples != null) {
             buildImuCharts(imuSamples, t0, gyroChart, accelChart);
@@ -144,18 +191,40 @@ public class RecordingViewerActivity extends AppCompatActivity {
             buildGpsChart(gpsSamples, t0, gpsChart);
         }
 
-        setupCrossHighlighting(t0, valuesAtTimestampText, gyroChart, accelChart,
-                orientationChart, gpsChart);
+        setupCrossHighlighting(gyroChart, accelChart, orientationChart, gpsChart);
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        stopProgressPolling();
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        stopProgressPolling();
+    }
+
+    private void stopProgressPolling() {
+        if (mainProgressRunnable != null) {
+            mainProgressHandler.removeCallbacks(mainProgressRunnable);
+        }
+        if (frontProgressRunnable != null) {
+            frontProgressHandler.removeCallbacks(frontProgressRunnable);
+        }
     }
 
     /**
      * Cycles the given VideoView's rotation through 0 -> 90 -> 180 -> 270 -> 0 degrees on every
-     * tap, applied via View#setRotation() since VideoView has no native frame-rotation API.
-     * isMain selects which of the two per-video rotation fields this button tracks, so the main
+     * tap, applied via View#setRotation() since VideoView has no native frame-rotation API, and
+     * recomputes the letterboxed fit for the new angle (see resizeVideoToFit) using the video's
+     * already-known intrinsic dimensions -- no MediaPlayer access needed here. isMain selects
+     * which of the two per-video rotation/intrinsic-size fields this button tracks, so the main
      * and front camera rotate buttons operate fully independently of one another.
      */
     private void setupRotateButton(ImageButton button, final VideoView videoView,
-                                    final boolean isMain) {
+                                    final FrameLayout container, final boolean isMain) {
         button.setOnClickListener(v -> {
             float current = isMain ? mainVideoRotationDeg : frontVideoRotationDeg;
             float next = (current + 90f) % 360f;
@@ -164,41 +233,213 @@ public class RecordingViewerActivity extends AppCompatActivity {
             } else {
                 frontVideoRotationDeg = next;
             }
-            videoView.setRotation(next);
+            int intrinsicWidth = isMain ? mainVideoIntrinsicWidth : frontVideoIntrinsicWidth;
+            int intrinsicHeight = isMain ? mainVideoIntrinsicHeight : frontVideoIntrinsicHeight;
+            resizeVideoToFit(videoView, container, intrinsicWidth, intrinsicHeight, next);
+        });
+    }
+
+    /**
+     * Computes the largest size (preserving the video's own aspect ratio) that fits within the
+     * container's current bounds, applies it as the VideoView's LayoutParams centered via
+     * Gravity.CENTER, and applies rotationDeg via View#setRotation(). Any space in the container
+     * not covered by that box reads as letterbox/pillarbox bars against the container's black
+     * background (see video_main_container/video_front_container in the layout).
+     *
+     * setRotation() spins the View around its own center without changing its measured layout
+     * size, so at 90/270 degrees the box computed here still uses the video's UNROTATED
+     * width/height -- only the container bounds it is scaled against are swapped, since it's the
+     * ROTATED visual bounding box (height x width once turned on its side) that actually needs
+     * to fit inside the container. E.g. a 1280x720 video rotated 90 degrees visually occupies a
+     * 720x1280-shaped footprint, so the fit is computed against (containerHeight, containerWidth)
+     * instead of (containerWidth, containerHeight) at that angle.
+     *
+     * The container's width/height may not be known yet if a layout pass hasn't happened (e.g.
+     * called from onPrepared before the first frame) -- in that case this defers itself via
+     * container.post(...) until it is.
+     */
+    private void resizeVideoToFit(final VideoView videoView, final FrameLayout container,
+                                   final int videoWidth, final int videoHeight,
+                                   final float rotationDeg) {
+        if (videoWidth <= 0 || videoHeight <= 0) {
+            return;
+        }
+        final int containerWidth = container.getWidth();
+        final int containerHeight = container.getHeight();
+        if (containerWidth <= 0 || containerHeight <= 0) {
+            container.post(() -> resizeVideoToFit(videoView, container, videoWidth, videoHeight,
+                    rotationDeg));
+            return;
+        }
+
+        int normalizedDeg = ((Math.round(rotationDeg) % 360) + 360) % 360;
+        boolean transposed = (normalizedDeg == 90 || normalizedDeg == 270);
+        float fitWidth = transposed ? containerHeight : containerWidth;
+        float fitHeight = transposed ? containerWidth : containerHeight;
+
+        float scale = Math.min(fitWidth / videoWidth, fitHeight / videoHeight);
+        int displayWidth = Math.max(1, Math.round(videoWidth * scale));
+        int displayHeight = Math.max(1, Math.round(videoHeight * scale));
+
+        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(displayWidth, displayHeight);
+        params.gravity = Gravity.CENTER;
+        videoView.setLayoutParams(params);
+        videoView.setRotation(rotationDeg);
+    }
+
+    /**
+     * Wires one VideoView's play/pause button and SeekBar. The SeekBar's progress is kept in
+     * sync with playback via a Handler+Runnable polling loop that reposts itself every ~200ms
+     * only while the video isPlaying() (so it naturally stops reposting the moment playback
+     * pauses/stops, no separate "stop polling" call needed there) -- suppressed while the user is
+     * actively dragging the thumb (onStartTrackingTouch/onStopTrackingTouch bracket a
+     * userSeeking flag) so the drag and the poll loop don't fight over the SeekBar's progress
+     * value, the standard Android SeekBar pattern.
+     *
+     * When isMain is true, each polling tick also calls onMainVideoProgress(...) to sweep the
+     * chart crosshair in step with main-camera playback (see "Chart <-> main video sync").
+     */
+    private void setupVideoControls(final VideoView videoView, final ImageButton playPauseButton,
+                                     final SeekBar seekBar, final Handler progressHandler,
+                                     final boolean isMain) {
+        final boolean[] userSeeking = {false};
+        final Runnable[] progressRunnable = new Runnable[1];
+        progressRunnable[0] = () -> {
+            if (!userSeeking[0]) {
+                int pos = videoView.getCurrentPosition();
+                seekBar.setProgress(pos);
+                if (isMain) {
+                    onMainVideoProgress(pos);
+                }
+            }
+            if (videoView.isPlaying()) {
+                progressHandler.postDelayed(progressRunnable[0], 200);
+            }
+        };
+        if (isMain) {
+            mainProgressRunnable = progressRunnable[0];
+        } else {
+            frontProgressRunnable = progressRunnable[0];
+        }
+
+        playPauseButton.setOnClickListener(v -> {
+            if (videoView.isPlaying()) {
+                videoView.pause();
+                playPauseButton.setImageResource(R.drawable.ic_baseline_play_arrow_24);
+            } else {
+                videoView.start();
+                playPauseButton.setImageResource(R.drawable.ic_baseline_pause_24);
+                progressHandler.post(progressRunnable[0]);
+            }
+        });
+
+        seekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+            }
+
+            @Override
+            public void onStartTrackingTouch(SeekBar seekBar) {
+                userSeeking[0] = true;
+            }
+
+            @Override
+            public void onStopTrackingTouch(SeekBar seekBar) {
+                userSeeking[0] = false;
+                videoView.seekTo(seekBar.getProgress());
+            }
         });
     }
 
     private void loadVideo(File sessionDir, String filename, TextView label,
-                            FrameLayout container, VideoView videoView, TextView fallback) {
+                            final FrameLayout container, final VideoView videoView,
+                            TextView fallback, final View controls,
+                            final ImageButton playPauseButton, final SeekBar seekBar,
+                            final boolean isMain) {
         File video = new File(sessionDir, filename);
         if (!video.exists()) {
             // Genuinely absent: this camera was never recorded for this session -- hide the
             // whole section instead of showing a "no video" placeholder.
             label.setVisibility(View.GONE);
             container.setVisibility(View.GONE);
+            controls.setVisibility(View.GONE);
             fallback.setVisibility(View.GONE);
             return;
         }
 
         label.setVisibility(View.VISIBLE);
         container.setVisibility(View.VISIBLE);
+        controls.setVisibility(View.VISIBLE);
         fallback.setVisibility(View.GONE);
         videoView.setVideoURI(Uri.fromFile(video));
 
-        // Deferred until after layout: MediaController#setAnchorView positions its popup using
-        // the anchor's getLocationOnScreen(), which is stale/zero if read synchronously here in
-        // onCreate before the first layout pass -- that made the controller render pinned to the
-        // bottom of the screen instead of over the video.
-        videoView.post(() -> {
-            MediaController controller = new MediaController(RecordingViewerActivity.this);
-            controller.setAnchorView(videoView);
-            videoView.setMediaController(controller);
+        videoView.setOnPreparedListener(mp -> {
+            int videoWidth = mp.getVideoWidth();
+            int videoHeight = mp.getVideoHeight();
+            if (isMain) {
+                mainVideoIntrinsicWidth = videoWidth;
+                mainVideoIntrinsicHeight = videoHeight;
+            } else {
+                frontVideoIntrinsicWidth = videoWidth;
+                frontVideoIntrinsicHeight = videoHeight;
+            }
+            float rotationDeg = isMain ? mainVideoRotationDeg : frontVideoRotationDeg;
+            resizeVideoToFit(videoView, container, videoWidth, videoHeight, rotationDeg);
+
+            seekBar.setMax(videoView.getDuration());
+            // VideoView autoplays by default once prepared (its target state defaults to
+            // STATE_PLAYING) -- reflect that in the button and kick off the progress-polling
+            // loop rather than leaving both stuck showing/tracking a paused state.
+            playPauseButton.setImageResource(R.drawable.ic_baseline_pause_24);
+            Runnable runnable = isMain ? mainProgressRunnable : frontProgressRunnable;
+            Handler handler = isMain ? mainProgressHandler : frontProgressHandler;
+            if (runnable != null) {
+                handler.post(runnable);
+            }
         });
     }
 
-    private static void showVideoUnavailable(ViewGroup container, TextView fallback) {
+    private static void showVideoUnavailable(ViewGroup container, View controls,
+                                               TextView fallback) {
         container.setVisibility(View.GONE);
+        controls.setVisibility(View.GONE);
         fallback.setVisibility(View.VISIBLE);
+    }
+
+    /**
+     * Parses edge_epochs.txt (written by TimeBaseManager) for the elapsedRealtimeNanos() value
+     * recorded at the start of the session -- the same clock already used as the origin for the
+     * sensor CSVs/charts (see computeSharedT0), so this is the reference point that converts a
+     * chart's "seconds since sharedT0" X value into the main video's playback position and back.
+     * File format: some number of '#'-prefixed comment lines, then tab-separated data rows whose
+     * first column is elapsedRealtimeNanos() -- this reads the first non-comment, non-blank line
+     * and parses its first field. Returns null (silently disabling sync, per the class doc) if
+     * the file is missing, empty, or fails to parse -- video and charts still work independently
+     * in that case.
+     */
+    private static Long parseRecordingStartElapsedNs(File sessionDir) {
+        File file = new File(sessionDir, "edge_epochs.txt");
+        if (!file.exists()) {
+            return null;
+        }
+        try (BufferedReader reader = new BufferedReader(new FileReader(file))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                String trimmed = line.trim();
+                if (trimmed.isEmpty() || trimmed.startsWith("#")) {
+                    continue;
+                }
+                String[] fields = trimmed.split("\t");
+                if (fields.length == 0) {
+                    continue;
+                }
+                return Long.parseLong(fields[0]);
+            }
+        } catch (IOException | NumberFormatException e) {
+            Timber.e(e, "Failed to parse edge_epochs.txt for chart/video sync");
+            return null;
+        }
+        return null;
     }
 
     private List<SensorCsvParser.ImuSample> parseImuOrFallback(
@@ -382,8 +623,9 @@ public class RecordingViewerActivity extends AppCompatActivity {
      * Wires an {@link OnChartValueSelectedListener} onto all 4 charts so touching any one of
      * them shows a consolidated "values at this timestamp" readout and cross-highlights the
      * same X position -- across every dataset, not just the first -- on all 4 charts (including
-     * itself). Since every chart now shares one t0, the touched chart's selected X (already
-     * "seconds since shared t0") is directly valid on all of them with no conversion.
+     * itself), then also seeks the main camera video to the matching instant (see
+     * seekMainVideoTo). Since every chart shares one sharedT0, the touched chart's selected X
+     * (already "seconds since sharedT0") is directly valid on all of them with no conversion.
      *
      * highlightValues(Highlight[]) is used (not the 2-/3-arg highlightValue(...) convenience
      * overloads, several of which default callListener to true or route through the 4-arg
@@ -391,38 +633,17 @@ public class RecordingViewerActivity extends AppCompatActivity {
      * the other charts does not itself re-invoke this listener. Verified by disassembling
      * MPAndroidChart v3.1.0's Chart#highlightValues(Highlight[]) from the Gradle cache: it only
      * assigns mIndicesToHighlight, calls setLastHighlighted(...), and invalidate() -- it never
-     * touches the selection listener. That same invalidate() is also what makes each chart's
-     * marker (see ChartValueMarkerView) redraw immediately, including on charts other than the
-     * one physically touched -- BarLineChartBase#onDraw always calls Chart#drawMarkers(canvas),
-     * which draws the marker whenever Chart#valuesToHighlight() is true, regardless of which
-     * chart's touch listener originally fired.
+     * touches the selection listener.
      */
-    private void setupCrossHighlighting(final long t0, final TextView valuesAtTimestampText,
-                                         final LineChart gyroChart, final LineChart accelChart,
+    private void setupCrossHighlighting(final LineChart gyroChart, final LineChart accelChart,
                                          final LineChart orientationChart,
                                          final LineChart gpsChart) {
-        final LineChart[] allCharts = {gyroChart, accelChart, orientationChart, gpsChart};
-
         OnChartValueSelectedListener listener = new OnChartValueSelectedListener() {
             @Override
             public void onValueSelected(Entry e, Highlight h) {
                 float x = h.getX();
-                valuesAtTimestampText.setText(buildValuesAtTimestampText(t0, x));
-                for (LineChart chart : allCharts) {
-                    LineData data = chart.getData();
-                    if (data == null) {
-                        continue;
-                    }
-                    int count = data.getDataSetCount();
-                    Highlight[] highlights = new Highlight[count];
-                    for (int i = 0; i < count; i++) {
-                        ILineDataSet dataSet = data.getDataSetByIndex(i);
-                        Entry entry = dataSet.getEntryForXValue(x, Float.NaN);
-                        float y = entry != null ? entry.getY() : 0f;
-                        highlights[i] = new Highlight(x, y, i);
-                    }
-                    chart.highlightValues(highlights);
-                }
+                highlightAllChartsAt(x);
+                seekMainVideoTo(x);
             }
 
             @Override
@@ -433,6 +654,75 @@ public class RecordingViewerActivity extends AppCompatActivity {
         for (LineChart chart : allCharts) {
             chart.setOnChartValueSelectedListener(listener);
         }
+    }
+
+    /**
+     * Shared by both directions of the chart <-> main video sync: a manual chart touch (via the
+     * OnChartValueSelectedListener wired in setupCrossHighlighting) and main-video playback (via
+     * onMainVideoProgress, called from the main video's progress-polling loop in
+     * setupVideoControls) both funnel through here to update the "values at this timestamp"
+     * readout and cross-highlight all 4 charts at the given X ("seconds since sharedT0").
+     */
+    private void highlightAllChartsAt(float x) {
+        valuesAtTimestampTextView.setText(buildValuesAtTimestampText(sharedT0, x));
+        for (LineChart chart : allCharts) {
+            LineData data = chart.getData();
+            if (data == null) {
+                continue;
+            }
+            int count = data.getDataSetCount();
+            Highlight[] highlights = new Highlight[count];
+            for (int i = 0; i < count; i++) {
+                ILineDataSet dataSet = data.getDataSetByIndex(i);
+                Entry entry = dataSet.getEntryForXValue(x, Float.NaN);
+                float y = entry != null ? entry.getY() : 0f;
+                highlights[i] = new Highlight(x, y, i);
+            }
+            chart.highlightValues(highlights);
+        }
+    }
+
+    /**
+     * Seeks the main camera video to the instant corresponding to chart X (seconds since
+     * sharedT0), converting through recordingStartElapsedNs (see parseRecordingStartElapsedNs).
+     * A no-op if sync is disabled (recordingStartElapsedNs is null) or the video isn't prepared
+     * yet (getDuration() <= 0, before onPrepared has fired).
+     *
+     * This only seeks -- it never calls start()/pause() -- so it does not itself set the video
+     * "playing", and therefore does not itself trigger the progress-polling loop that would call
+     * back into onMainVideoProgress/highlightAllChartsAt. If the video happens to already be
+     * playing when a chart is touched, the next poll tick (within ~200ms) will report the new
+     * position and re-highlight at essentially the same X -- a harmless refresh, not a feedback
+     * loop, since that path never seeks the video again.
+     */
+    private void seekMainVideoTo(float x) {
+        if (recordingStartElapsedNs == null || mainVideoView == null) {
+            return;
+        }
+        int duration = mainVideoView.getDuration();
+        if (duration <= 0) {
+            return;
+        }
+        long selectedTimestampNs = sharedT0 + (long) (x * 1e9);
+        long videoPositionMs = (selectedTimestampNs - recordingStartElapsedNs) / 1_000_000L;
+        long clamped = Math.max(0L, Math.min(videoPositionMs, (long) duration));
+        mainVideoView.seekTo((int) clamped);
+    }
+
+    /**
+     * Converts the main video's current playback position back to chart X (seconds since
+     * sharedT0) via recordingStartElapsedNs, and cross-highlights all 4 charts there -- called
+     * from the main video's progress-polling loop (see setupVideoControls) so the crosshair
+     * visibly sweeps across the charts as the video plays. A no-op if sync is disabled
+     * (recordingStartElapsedNs is null).
+     */
+    private void onMainVideoProgress(int positionMs) {
+        if (recordingStartElapsedNs == null) {
+            return;
+        }
+        long sensorTimestampNs = recordingStartElapsedNs + positionMs * 1_000_000L;
+        float x = (sensorTimestampNs - sharedT0) / 1e9f;
+        highlightAllChartsAt(x);
     }
 
     private String buildValuesAtTimestampText(long t0, float x) {

@@ -218,8 +218,11 @@ public class CameraActivity extends CameraActivityBase
     private StreamingServer mStreamingServer;
     private TextView mStreamingStatusText;
 
-    // Rotates the overlay TextViews to compensate for phone orientation so their text
-    // stays upright even though the Activity itself is locked to portrait.
+    // Relocates the whole overlay info block (as one unit, text rotated together) to the
+    // screen's new top-left corner as the phone physically rotates, so it stays upright and
+    // in the corner nearest the user's current grip even though the Activity itself is
+    // locked to portrait.
+    private View mOverlayInfoContainer;
     private OrientationEventListener mOrientationEventListener;
     private int mLastAppliedRotationBucket = 0;
 
@@ -349,6 +352,7 @@ public class CameraActivity extends CameraActivityBase
         mNumSnapshotText = findViewById(R.id.numSnapshot_text);
         mGpsStatusText = findViewById(R.id.gps_status);
         mStreamingStatusText = findViewById(R.id.streaming_status_text);
+        mOverlayInfoContainer = findViewById(R.id.overlayInfoContainer);
 
         updateOverlayVisibility();
     }
@@ -442,7 +446,7 @@ public class CameraActivity extends CameraActivityBase
                     }
                     mLastAppliedRotationBucket = bucket;
                     int compensated = (360 - bucket) % 360;
-                    rotateOverlayViews(compensated);
+                    relocateOverlayContainer(compensated);
                 }
             };
         }
@@ -538,50 +542,27 @@ public class CameraActivity extends CameraActivityBase
     }
 
     /**
-     * Rotates the overlay info TextViews to the given compensated angle so their text stays
-     * upright regardless of how the phone is physically held. Purely cosmetic -- does not
-     * touch the portrait lock or the camera preview/surface logic.
+     * Rotates the whole overlay info block as a single unit to the given compensated angle,
+     * pivoting about the screen/parent's true center (expressed in the container's own local
+     * coordinates). Because the container starts life pinned to the top-left corner, rotating
+     * it about the screen center both reorients its text AND relocates the whole block to the
+     * mirror corner (e.g. top-right when the phone is rotated 90 degrees) as a natural side
+     * effect of the rotation -- no separate translation step needed. Purely cosmetic -- does
+     * not touch the portrait lock or the camera preview/surface logic.
      */
-    private void rotateOverlayViews(int compensated) {
-        rotateOverlayView(mKeyCameraParamsText, compensated);
-        rotateOverlayView(mCaptureResultText, compensated);
-        rotateOverlayView(mKeyCameraParamsText2, compensated);
-        rotateOverlayView(mCaptureResultText2, compensated);
-        rotateOverlayView(mOutputDirLabel, compensated);
-        rotateOverlayView(mOutputDirText, compensated);
-        rotateOverlayView(mNumSnapshotLabel, compensated);
-        rotateOverlayView(mNumSnapshotText, compensated);
-        rotateOverlayView(mGpsStatusText, compensated);
-        rotateOverlayView(mStreamingStatusText, compensated);
-    }
-
-    private void rotateOverlayView(TextView view, int compensated) {
-        if (view == null) {
+    private void relocateOverlayContainer(int compensated) {
+        if (mOverlayInfoContainer == null) {
             return;
         }
-        view.setPivotX(0f);
-        view.setPivotY(0f);
-        float tx = 0f;
-        float ty = 0f;
-        int width = view.getWidth();
-        int height = view.getHeight();
-        if (width > 0 && height > 0) {
-            switch (compensated) {
-                case 90:
-                    tx = height;
-                    break;
-                case 180:
-                    tx = width;
-                    ty = height;
-                    break;
-                case 270:
-                    ty = width;
-                    break;
-                default:
-                    break;
-            }
+        View parent = (View) mOverlayInfoContainer.getParent();
+        if (parent == null || parent.getWidth() == 0 || parent.getHeight() == 0) {
+            return;
         }
-        view.animate().rotation(compensated).translationX(tx).translationY(ty).setDuration(200).start();
+        float pivotX = parent.getWidth() / 2f - mOverlayInfoContainer.getLeft();
+        float pivotY = parent.getHeight() / 2f - mOverlayInfoContainer.getTop();
+        mOverlayInfoContainer.setPivotX(pivotX);
+        mOverlayInfoContainer.setPivotY(pivotY);
+        mOverlayInfoContainer.animate().rotation(compensated).setDuration(200).start();
     }
 
     @Override
