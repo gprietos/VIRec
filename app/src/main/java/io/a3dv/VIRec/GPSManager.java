@@ -23,6 +23,19 @@ import timber.log.Timber;
 public class GPSManager implements LocationListener {
     public static String GpsHeader = "Timestamp[nanosecond],latitude[degrees],longitude[degrees],altitude[meters],speed[meters/second],Unix time[nanosecond]\n";
 
+    /** Lets another class (e.g. StreamingServer) observe every location fix as it arrives,
+     * independent of whether local CSV recording is currently on -- live PC monitoring should
+     * work even before the user presses record. */
+    public interface LocationStreamListener {
+        void onLocationSample(long timestampNs, double lat, double lon, double alt, float speed, long unixTimeMillis);
+    }
+
+    private LocationStreamListener mStreamListener;
+
+    public void setStreamListener(LocationStreamListener listener) {
+        mStreamListener = listener;
+    }
+
     private final Activity activity;
 
     private TextView mGpsStatusText;
@@ -153,6 +166,10 @@ public class GPSManager implements LocationListener {
         );
 
 //        mLocationData.add(lp);
+
+        if (mStreamListener != null) {
+            mStreamListener.onLocationSample(lp.timestamp, latitude, longitude, altitude, speed, unixTime);
+        }
 
         if (mRecordingLocationData) {
             try {

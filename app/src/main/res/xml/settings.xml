@@ -75,4 +75,34 @@
             app:iconSpaceReserved="false" />
 
     </PreferenceCategory>
+
+    <PreferenceCategory
+        android:title="Streaming Settings"
+        app:iconSpaceReserved="false">
+
+        <SwitchPreference
+            android:defaultValue="false"
+            android:key="prefEnableStreaming"
+            android:summaryOff="Off"
+            android:summaryOn="On (streams video + telemetry over local WiFi — no authentication, anyone on your network can view)"
+            android:title="Enable Live Streaming"
+            app:iconSpaceReserved="false" />
+
+        <EditTextPreference
+            android:defaultValue="8080"
+            android:dependency="prefEnableStreaming"
+            android:key="prefStreamPort"
+            android:summary="Port the phone listens on for the PC client"
+            android:title="Streaming Port"
+            app:iconSpaceReserved="false" />
+
+        <EditTextPreference
+            android:defaultValue="5"
+            android:dependency="prefEnableStreaming"
+            android:key="prefStreamFps"
+            android:summary="Target frames per second for the live video stream"
+            android:title="Stream Frame Rate"
+            app:iconSpaceReserved="false" />
+
+    </PreferenceCategory>
 </PreferenceScreen>

@@ -60,6 +60,21 @@ public class IMUManager implements SensorEventListener {
         }
     }
 
+    /** Lets another class (e.g. StreamingServer) observe every gyro/accel and orientation
+     * sample as it arrives, independent of whether local CSV recording is currently on. */
+    public interface ImuStreamListener {
+        void onGyroAccelSample(long timestampNs, float gx, float gy, float gz,
+                                float ax, float ay, float az, long unixTimeMillis);
+        void onOrientationSample(long timestampNs, double yaw, double pitch, double roll,
+                                  long unixTimeMillis);
+    }
+
+    private ImuStreamListener mStreamListener;
+
+    public void setStreamListener(ImuStreamListener listener) {
+        mStreamListener = listener;
+    }
+
     // Sensor listeners
     private final SensorManager mSensorManager;
     private final Sensor mAccel;
@@ -243,26 +258,36 @@ public class IMUManager implements SensorEventListener {
             SensorPacket sp = new SensorPacket(event.timestamp, unixTime, event.values);
             mGyroData.add(sp);
             SensorPacket syncedData = syncInertialData();
-            if (syncedData != null && mRecordingInertialData) {
-                try {
-                    mDataWriter.write(syncedData.toString() + "\n");
-                } catch (IOException ioe) {
-                    Timber.e(ioe);
+            if (syncedData != null) {
+                if (mRecordingInertialData) {
+                    try {
+                        mDataWriter.write(syncedData.toString() + "\n");
+                    } catch (IOException ioe) {
+                        Timber.e(ioe);
+                    }
+                }
+                if (mStreamListener != null) {
+                    float[] v = syncedData.values;
+                    mStreamListener.onGyroAccelSample(syncedData.timestamp,
+                            v[0], v[1], v[2], v[3], v[4], v[5], syncedData.unixTime);
                 }
             }
         } else if (event.sensor.getType() == Sensor.TYPE_ROTATION_VECTOR) {
+            SensorManager.getRotationMatrixFromVector(mRotationMatrix, event.values);
+            SensorManager.getOrientation(mRotationMatrix, mOrientationRad);
+            double yawDeg = Math.toDegrees(mOrientationRad[0]);
+            double pitchDeg = Math.toDegrees(mOrientationRad[1]);
+            double rollDeg = Math.toDegrees(mOrientationRad[2]);
             if (mRecordingInertialData) {
-                SensorManager.getRotationMatrixFromVector(mRotationMatrix, event.values);
-                SensorManager.getOrientation(mRotationMatrix, mOrientationRad);
-                double yawDeg = Math.toDegrees(mOrientationRad[0]);
-                double pitchDeg = Math.toDegrees(mOrientationRad[1]);
-                double rollDeg = Math.toDegrees(mOrientationRad[2]);
                 try {
                     mOrientationWriter.write(event.timestamp + "," + yawDeg + "," + pitchDeg
                             + "," + rollDeg + "," + unixTime + "000000\n");
                 } catch (IOException ioe) {
                     Timber.e(ioe);
                 }
+            }
+            if (mStreamListener != null) {
+                mStreamListener.onOrientationSample(event.timestamp, yawDeg, pitchDeg, rollDeg, unixTime);
             }
         }
     }

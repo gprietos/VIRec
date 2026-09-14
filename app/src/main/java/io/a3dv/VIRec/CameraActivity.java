@@ -3,6 +3,7 @@ package io.a3dv.VIRec;
 import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.pm.ActivityInfo;
 import android.graphics.SurfaceTexture;
 import android.opengl.EGL14;
@@ -32,6 +33,7 @@ import androidx.annotation.RequiresApi;
 import androidx.preference.PreferenceManager;
 
 import java.io.File;
+import java.io.IOException;
 import java.lang.ref.WeakReference;
 import java.text.SimpleDateFormat;
 import java.util.Date;
@@ -40,6 +42,7 @@ import java.util.Locale;
 import javax.microedition.khronos.egl.EGLConfig;
 import javax.microedition.khronos.opengles.GL10;
 
+import fi.iki.elonen.NanoHTTPD;
 import io.a3dv.VIRec.gles.FullFrameRect;
 import io.a3dv.VIRec.gles.Texture2dProgram;
 import timber.log.Timber;
@@ -207,6 +210,9 @@ public class CameraActivity extends CameraActivityBase
     private GPSManager mGpsManager;
     private TimeBaseManager mTimeBaseManager;
 
+    private StreamingServer mStreamingServer;
+    private TextView mStreamingStatusText;
+
     // Front camera is off by default (Settings > Enable Front Camera); read once per activity
     // lifecycle in onCreate since changing it only takes effect after the activity restarts.
     private boolean mSecondCameraEnabled;
@@ -325,6 +331,7 @@ public class CameraActivity extends CameraActivityBase
         mCaptureResultText = findViewById(R.id.captureResult_text);
         mCaptureResultText2 = findViewById(R.id.captureResult_text2);
         mOutputDirText = findViewById(R.id.cameraOutputDir_text);
+        mStreamingStatusText = findViewById(R.id.streaming_status_text);
 
         if (!mSecondCameraEnabled) {
             mKeyCameraParamsText2.setVisibility(View.GONE);
@@ -373,12 +380,59 @@ public class CameraActivity extends CameraActivityBase
 
         mImuManager.register();
         mGpsManager.register();
+
+        SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(this);
+        boolean streamingEnabled = prefs.getBoolean("prefEnableStreaming", false);
+        if (streamingEnabled) {
+            int port;
+            try {
+                port = Integer.parseInt(prefs.getString("prefStreamPort", "8080"));
+            } catch (NumberFormatException e) {
+                port = 8080;
+            }
+            try {
+                mStreamingServer = new StreamingServer(port);
+                mStreamingServer.start(NanoHTTPD.SOCKET_READ_TIMEOUT, false);
+                mImuManager.setStreamListener(new IMUManager.ImuStreamListener() {
+                    @Override
+                    public void onGyroAccelSample(long timestampNs, float gx, float gy, float gz,
+                                                   float ax, float ay, float az, long unixTimeMillis) {
+                        mStreamingServer.publishImuSample(timestampNs, gx, gy, gz, ax, ay, az, unixTimeMillis);
+                    }
+                    @Override
+                    public void onOrientationSample(long timestampNs, double yaw, double pitch, double roll,
+                                                     long unixTimeMillis) {
+                        mStreamingServer.publishOrientationSample(timestampNs, yaw, pitch, roll, unixTimeMillis);
+                    }
+                });
+                mGpsManager.setStreamListener((timestampNs, lat, lon, alt, speed, unixTimeMillis) ->
+                        mStreamingServer.publishLocationSample(timestampNs, lat, lon, alt, speed, unixTimeMillis));
+                if (mCamera2Proxy != null) {
+                    mCamera2Proxy.setFrameStreamListener((jpegBytes, timestampNs) ->
+                            mStreamingServer.publishFrame(jpegBytes));
+                }
+                String ip = NetworkUtils.getLocalIpAddress();
+                mStreamingStatusText.setText("http://" + (ip != null ? ip : "?") + ":" + port + "/");
+                mStreamingStatusText.setVisibility(View.VISIBLE);
+            } catch (IOException e) {
+                Timber.e(e, "Failed to start streaming server");
+                mStreamingStatusText.setVisibility(View.GONE);
+            }
+        } else {
+            mStreamingStatusText.setVisibility(View.GONE);
+        }
     }
 
     @Override
     protected void onPause() {
         Timber.d("onPause -- releasing camera");
         super.onPause();
+
+        if (mStreamingServer != null) {
+            mStreamingServer.stop();
+            mStreamingServer = null;
+        }
+
         // no more frame metadata will be saved during pause
         if (mCamera2Proxy != null) {
             mCamera2Proxy.releaseCamera();
@@ -499,6 +553,9 @@ public class CameraActivity extends CameraActivityBase
         } else if (item.getItemId() == R.id.menu_imu) {
             final Intent toImuViewer = new Intent(this, ImuViewerActivity.class);
             startActivity(toImuViewer);
+        } else if (item.getItemId() == R.id.menu_recordings) {
+            final Intent toRecordings = new Intent(this, RecordingsListActivity.class);
+            startActivity(toRecordings);
         } else if (item.getItemId() == R.id.menu_about) {
             final Intent toAbout = new Intent(this, AboutActivity.class);
             startActivity(toAbout);

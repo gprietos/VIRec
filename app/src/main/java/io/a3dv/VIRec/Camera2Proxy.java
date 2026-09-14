@@ -4,8 +4,10 @@ import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.graphics.ImageFormat;
 import android.graphics.Rect;
 import android.graphics.SurfaceTexture;
+import android.graphics.YuvImage;
 import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraCaptureSession;
 import android.hardware.camera2.CameraCharacteristics;
@@ -17,11 +19,13 @@ import android.hardware.camera2.CaptureResult;
 import android.hardware.camera2.TotalCaptureResult;
 import android.hardware.camera2.params.MeteringRectangle;
 import android.hardware.camera2.params.StreamConfigurationMap;
+import android.media.Image;
 import android.media.ImageReader;
 import android.media.MediaRecorder;
 
 import android.os.Handler;
 import android.os.HandlerThread;
+import android.os.SystemClock;
 import androidx.preference.PreferenceManager;
 import androidx.annotation.NonNull;
 
@@ -30,8 +34,10 @@ import android.util.SizeF;
 import android.view.Surface;
 
 import java.io.BufferedWriter;
+import java.io.ByteArrayOutputStream;
 import java.io.FileWriter;
 import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.util.ArrayList;
 
 import java.util.List;
@@ -58,6 +64,23 @@ public class Camera2Proxy {
     private ImageReader mImageReader;
     private Surface mPreviewSurface;
     private SurfaceTexture mPreviewSurfaceTexture = null;
+
+    /** Live JPEG tap for StreamingServer, off by default. Wired up as a second simultaneous
+     * ImageReader target of the repeating capture request only when a listener is set (before
+     * configureCamera()/openCamera() runs), so the extra YUV->JPEG conversion work never
+     * happens when nobody's watching. */
+    public interface FrameStreamListener {
+        void onJpegFrame(byte[] jpegBytes, long timestampNs);
+    }
+
+    private FrameStreamListener mFrameStreamListener;
+    private Handler mImageReaderHandler;
+    private HandlerThread mImageReaderThread;
+    private long mLastStreamedFrameElapsedMs = 0;
+
+    public void setFrameStreamListener(FrameStreamListener listener) {
+        mFrameStreamListener = listener;
+    }
 
     /**
      * Camera state: Showing camera preview.
@@ -253,6 +276,7 @@ public class Camera2Proxy {
         mCameraIdStr = "";
         stopRecordingCaptureResult();
         stopBackgroundThread();
+        stopImageReaderThread();
     }
 
     public void setPreviewSurfaceTexture(SurfaceTexture surfaceTexture) {
@@ -349,6 +373,12 @@ public class Camera2Proxy {
             surfaces.add(mPreviewSurface);
             mPreviewRequestBuilder.addTarget(mPreviewSurface);
 
+            if (mFrameStreamListener != null) {
+                setUpImageReader();
+                surfaces.add(mImageReader.getSurface());
+                mPreviewRequestBuilder.addTarget(mImageReader.getSurface());
+            }
+
             mCameraDevice.createCaptureSession(surfaces,
                     new CameraCaptureSession.StateCallback() {
 
@@ -367,6 +397,144 @@ public class Camera2Proxy {
         } catch (CameraAccessException e) {
             Timber.e(e);
         }
+    }
+
+    /**
+     * Sets up mImageReader as a second, simultaneous target of the repeating preview/record
+     * capture request, feeding onImageAvailable below. Only called when mFrameStreamListener is
+     * non-null (see initPreviewRequest), so streaming carries no cost when nobody is watching.
+     */
+    private void setUpImageReader() {
+        startImageReaderThread();
+        try {
+            CameraCharacteristics characteristics =
+                    mCameraManager.getCameraCharacteristics(mCameraIdStr);
+            StreamConfigurationMap map = characteristics.get(
+                    CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
+            Size[] yuvSizeChoices = map.getOutputSizes(ImageFormat.YUV_420_888);
+            // Same size-selection helper used for mPreviewSize/mVideoSize elsewhere in this
+            // class; target roughly 640x480 at the recording's aspect ratio.
+            Size streamSize = CameraUtils.chooseOptimalSize(yuvSizeChoices, 640, 480, mVideoSize);
+            mImageReader = ImageReader.newInstance(
+                    streamSize.getWidth(), streamSize.getHeight(), ImageFormat.YUV_420_888, 2);
+            mImageReader.setOnImageAvailableListener(mOnImageAvailableListener, mImageReaderHandler);
+        } catch (CameraAccessException e) {
+            Timber.e(e, "Failed to set up streaming ImageReader");
+        }
+    }
+
+    private final ImageReader.OnImageAvailableListener mOnImageAvailableListener =
+            new ImageReader.OnImageAvailableListener() {
+        @Override
+        public void onImageAvailable(ImageReader reader) {
+            Image image = reader.acquireLatestImage(); // drops any backlog; this IS the
+            // throttling mechanism against slow JPEG encoding -- no manual frame-skip needed.
+            if (image == null) {
+                return;
+            }
+
+            int targetFps;
+            try {
+                targetFps = Integer.parseInt(
+                        mSharedPreferences.getString("prefStreamFps", "5"));
+            } catch (NumberFormatException e) {
+                targetFps = 5;
+            }
+            if (targetFps <= 0) {
+                targetFps = 5;
+            }
+            long minIntervalMs = 1000L / targetFps;
+            long nowElapsedMs = SystemClock.elapsedRealtime();
+            if (nowElapsedMs - mLastStreamedFrameElapsedMs < minIntervalMs) {
+                image.close();
+                return;
+            }
+            mLastStreamedFrameElapsedMs = nowElapsedMs;
+
+            if (mFrameStreamListener == null) {
+                image.close();
+                return;
+            }
+
+            try {
+                byte[] nv21 = yuv420ToNv21(image);
+                int width = image.getWidth();
+                int height = image.getHeight();
+                long timestampNs = image.getTimestamp();
+                image.close();
+
+                YuvImage yuvImage = new YuvImage(nv21, ImageFormat.NV21, width, height, null);
+                ByteArrayOutputStream out = new ByteArrayOutputStream();
+                yuvImage.compressToJpeg(new Rect(0, 0, width, height), 50, out);
+                mFrameStreamListener.onJpegFrame(out.toByteArray(), timestampNs);
+            } catch (Exception e) {
+                Timber.e(e, "Error converting camera frame to JPEG for streaming");
+                image.close();
+            }
+        }
+    };
+
+    /** Standard YUV_420_888 (3-plane, possibly non-contiguous/interleaved chroma) -> NV21
+     * conversion, respecting each plane's rowStride/pixelStride. */
+    private static byte[] yuv420ToNv21(Image image) {
+        int width = image.getWidth();
+        int height = image.getHeight();
+        Image.Plane[] planes = image.getPlanes();
+        Image.Plane yPlane = planes[0];
+        Image.Plane uPlane = planes[1];
+        Image.Plane vPlane = planes[2];
+
+        int ySize = width * height;
+        byte[] nv21 = new byte[ySize + (width * height) / 2];
+
+        ByteBuffer yBuffer = yPlane.getBuffer();
+        int yRowStride = yPlane.getRowStride();
+        int yPixelStride = yPlane.getPixelStride();
+        int pos = 0;
+        if (yPixelStride == 1 && yRowStride == width) {
+            yBuffer.get(nv21, 0, ySize);
+            pos = ySize;
+        } else {
+            byte[] row = new byte[yRowStride];
+            for (int r = 0; r < height; r++) {
+                yBuffer.position(r * yRowStride);
+                int rowLen = Math.min(yRowStride, yBuffer.remaining());
+                yBuffer.get(row, 0, rowLen);
+                for (int c = 0; c < width; c++) {
+                    nv21[pos++] = row[c * yPixelStride];
+                }
+            }
+        }
+
+        ByteBuffer uBuffer = uPlane.getBuffer();
+        ByteBuffer vBuffer = vPlane.getBuffer();
+        int uRowStride = uPlane.getRowStride();
+        int uPixelStride = uPlane.getPixelStride();
+        int vRowStride = vPlane.getRowStride();
+        int vPixelStride = vPlane.getPixelStride();
+
+        int chromaHeight = height / 2;
+        int chromaWidth = width / 2;
+        byte[] uRow = new byte[uRowStride];
+        byte[] vRow = new byte[vRowStride];
+        int uvPos = ySize;
+        // NV21 = Y plane followed by interleaved VU pairs, one pair per 2x2 luma block.
+        for (int r = 0; r < chromaHeight; r++) {
+            uBuffer.position(r * uRowStride);
+            int uRowLen = Math.min(uRowStride, uBuffer.remaining());
+            uBuffer.get(uRow, 0, uRowLen);
+
+            vBuffer.position(r * vRowStride);
+            int vRowLen = Math.min(vRowStride, vBuffer.remaining());
+            vBuffer.get(vRow, 0, vRowLen);
+
+            for (int c = 0; c < chromaWidth; c++) {
+                nv21[uvPos++] = vRow[c * vPixelStride];
+                nv21[uvPos++] = uRow[c * uPixelStride];
+            }
+        }
+
+        return nv21;
     }
 
     public void startPreview() {
@@ -558,6 +726,33 @@ public class Camera2Proxy {
             }
             mBackgroundThread = null;
             mBackgroundHandler = null;
+        } catch (InterruptedException e) {
+            Timber.e(e);
+        }
+    }
+
+    // Dedicated thread for ImageReader's onImageAvailable callback -- kept separate from
+    // mBackgroundThread/mBackgroundHandler, which already carries camera device/session/capture
+    // -result callbacks (including the focus state machine), mirroring this codebase's existing
+    // per-concern-thread pattern (e.g. IMUManager's "Sensor thread").
+    private void startImageReaderThread() {
+        if (mImageReaderThread == null || mImageReaderHandler == null) {
+            Timber.v("startImageReaderThread");
+            mImageReaderThread = new HandlerThread("ImageReaderThread");
+            mImageReaderThread.start();
+            mImageReaderHandler = new Handler(mImageReaderThread.getLooper());
+        }
+    }
+
+    private void stopImageReaderThread() {
+        Timber.v("stopImageReaderThread");
+        try {
+            if (mImageReaderThread != null) {
+                mImageReaderThread.quitSafely();
+                mImageReaderThread.join();
+            }
+            mImageReaderThread = null;
+            mImageReaderHandler = null;
         } catch (InterruptedException e) {
             Timber.e(e);
         }
