@@ -182,6 +182,8 @@ public class RecordingViewerActivity extends AppCompatActivity {
 
         TextView orientationUnitLabel = findViewById(R.id.label_orientation_unit);
         orientationUnitLabel.setText(useRadians ? "rad" : "deg");
+        TextView gyroUnitLabel = findViewById(R.id.label_gyro_yaxis_unit);
+        gyroUnitLabel.setText(useRadians ? "rad/s" : "deg/s");
 
         ImageButton zoomResetGyroButton = findViewById(R.id.button_zoom_reset_gyro);
         ImageButton zoomResetAccelButton = findViewById(R.id.button_zoom_reset_accel);
@@ -522,16 +524,7 @@ public class RecordingViewerActivity extends AppCompatActivity {
             resizeVideoToFit(videoView, container, videoWidth, videoHeight, rotationDeg);
 
             seekBar.setMax(mp.getDuration());
-            playPauseButton.setImageResource(R.drawable.ic_baseline_pause_24);
-            Runnable runnable = isMain ? mainProgressRunnable : frontProgressRunnable;
-            Handler handler = isMain ? mainProgressHandler : frontProgressHandler;
-            if (runnable != null) {
-                handler.post(runnable);
-            }
-            // Unlike VideoView (which autoplayed once prepared, its target state defaulting to
-            // STATE_PLAYING), a raw MediaPlayer does not -- start it explicitly to preserve the
-            // previous autoplay-on-load behavior.
-            mp.start();
+            playPauseButton.setImageResource(R.drawable.ic_baseline_play_arrow_24);
         });
 
         // TextureView's SurfaceTexture isn't available until the view is attached/laid out.
@@ -714,9 +707,12 @@ public class RecordingViewerActivity extends AppCompatActivity {
         List<Entry> az = new ArrayList<>();
         for (SensorCsvParser.ImuSample s : samples) {
             float x = secondsSince(t0, s.t);
-            gx.add(new Entry(x, s.gx));
-            gy.add(new Entry(x, s.gy));
-            gz.add(new Entry(x, s.gz));
+            float gxVal = useRadians ? s.gx : (float) Math.toDegrees(s.gx);
+            float gyVal = useRadians ? s.gy : (float) Math.toDegrees(s.gy);
+            float gzVal = useRadians ? s.gz : (float) Math.toDegrees(s.gz);
+            gx.add(new Entry(x, gxVal));
+            gy.add(new Entry(x, gyVal));
+            gz.add(new Entry(x, gzVal));
             ax.add(new Entry(x, s.ax));
             ay.add(new Entry(x, s.ay));
             az.add(new Entry(x, s.az));
@@ -919,8 +915,12 @@ public class RecordingViewerActivity extends AppCompatActivity {
 
         SensorCsvParser.ImuSample imu = findNearestImu(t0, x);
         if (imu != null) {
+            double gxVal = useRadians ? imu.gx : Math.toDegrees(imu.gx);
+            double gyVal = useRadians ? imu.gy : Math.toDegrees(imu.gy);
+            double gzVal = useRadians ? imu.gz : Math.toDegrees(imu.gz);
+            String gyroUnit = useRadians ? "rad/s" : "deg/s";
             sb.append(String.format(Locale.US,
-                    "\nGyro (rad/s): x=%.3f  y=%.3f  z=%.3f", imu.gx, imu.gy, imu.gz));
+                    "\nGyro (%s): x=%.3f  y=%.3f  z=%.3f", gyroUnit, gxVal, gyVal, gzVal));
             sb.append(String.format(Locale.US,
                     "\nAccel (m/s^2): x=%.3f  y=%.3f  z=%.3f", imu.ax, imu.ay, imu.az));
         }

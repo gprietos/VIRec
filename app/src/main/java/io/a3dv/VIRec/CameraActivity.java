@@ -21,12 +21,14 @@ import android.view.MenuItem;
 import android.view.OrientationEventListener;
 import android.view.Surface;
 import android.view.View;
+import android.view.ViewGroup;
 import android.view.WindowManager;
 import android.widget.AdapterView;
 import android.widget.AdapterView.OnItemSelectedListener;
 import android.widget.ArrayAdapter;
 import android.widget.ImageButton;
 import android.widget.PopupMenu;
+import android.widget.RelativeLayout;
 import android.widget.Spinner;
 import android.widget.TextView;
 
@@ -446,7 +448,7 @@ public class CameraActivity extends CameraActivityBase
                     }
                     mLastAppliedRotationBucket = bucket;
                     int compensated = (360 - bucket) % 360;
-                    relocateOverlayContainer(compensated);
+                    relocateOverlayContainer(bucket, compensated);
                 }
             };
         }
@@ -542,27 +544,61 @@ public class CameraActivity extends CameraActivityBase
     }
 
     /**
-     * Rotates the whole overlay info block as a single unit to the given compensated angle,
-     * pivoting about the screen/parent's true center (expressed in the container's own local
-     * coordinates). Because the container starts life pinned to the top-left corner, rotating
-     * it about the screen center both reorients its text AND relocates the whole block to the
-     * mirror corner (e.g. top-right when the phone is rotated 90 degrees) as a natural side
-     * effect of the rotation -- no separate translation step needed. Purely cosmetic -- does
-     * not touch the portrait lock or the camera preview/surface logic.
+     * Re-anchors the overlay info block to the screen corner matching the current rotation
+     * bucket, then rotates it in place (default center pivot, no animation) to the compensated
+     * angle. The block is a RelativeLayout child pinned to a corner via alignParent* rules; a
+     * naive rotation about the parent's true center correctly relocates a *point* to the mirror
+     * corner, but because this block is tall/narrow and anchored near the top, its rotated
+     * bounding box ends up with its top edge above y=0 -- it visibly disappears off the top of
+     * the screen. Re-anchoring to the destination corner first and only then rotating about the
+     * block's own center avoids that entirely.
+     *
+     * Bucket-to-corner mapping (derived from OrientationEventListener's convention, i.e. the
+     * angle the device has rotated anticlockwise from its natural/upright orientation):
+     *   bucket   0 (upright)              -> top + start
+     *   bucket  90 (rotated 90 CCW)        -> bottom + start
+     *   bucket 180 (upside down)           -> bottom + end
+     *   bucket 270 (rotated 90 CW / 90 anticlockwise from 360) -> top + end
+     * Confirmed on-device for bucket 270: rotating the phone 90 degrees anticlockwise places the
+     * block at the screen's physical top-right corner. The other three corners follow the same
+     * pattern by construction but have not been independently verified on-device yet.
+     *
+     * Purely cosmetic -- does not touch the portrait lock or the camera preview/surface logic.
      */
-    private void relocateOverlayContainer(int compensated) {
+    private void relocateOverlayContainer(int bucket, int compensated) {
         if (mOverlayInfoContainer == null) {
             return;
         }
-        View parent = (View) mOverlayInfoContainer.getParent();
-        if (parent == null || parent.getWidth() == 0 || parent.getHeight() == 0) {
+        ViewGroup.LayoutParams rawParams = mOverlayInfoContainer.getLayoutParams();
+        if (!(rawParams instanceof RelativeLayout.LayoutParams)) {
             return;
         }
-        float pivotX = parent.getWidth() / 2f - mOverlayInfoContainer.getLeft();
-        float pivotY = parent.getHeight() / 2f - mOverlayInfoContainer.getTop();
-        mOverlayInfoContainer.setPivotX(pivotX);
-        mOverlayInfoContainer.setPivotY(pivotY);
-        mOverlayInfoContainer.animate().rotation(compensated).setDuration(200).start();
+        RelativeLayout.LayoutParams params = (RelativeLayout.LayoutParams) rawParams;
+        params.removeRule(RelativeLayout.ALIGN_PARENT_TOP);
+        params.removeRule(RelativeLayout.ALIGN_PARENT_BOTTOM);
+        params.removeRule(RelativeLayout.ALIGN_PARENT_START);
+        params.removeRule(RelativeLayout.ALIGN_PARENT_END);
+        switch (bucket) {
+            case 90:
+                params.addRule(RelativeLayout.ALIGN_PARENT_BOTTOM);
+                params.addRule(RelativeLayout.ALIGN_PARENT_START);
+                break;
+            case 180:
+                params.addRule(RelativeLayout.ALIGN_PARENT_BOTTOM);
+                params.addRule(RelativeLayout.ALIGN_PARENT_END);
+                break;
+            case 270:
+                params.addRule(RelativeLayout.ALIGN_PARENT_TOP);
+                params.addRule(RelativeLayout.ALIGN_PARENT_END);
+                break;
+            case 0:
+            default:
+                params.addRule(RelativeLayout.ALIGN_PARENT_TOP);
+                params.addRule(RelativeLayout.ALIGN_PARENT_START);
+                break;
+        }
+        mOverlayInfoContainer.setLayoutParams(params);
+        mOverlayInfoContainer.setRotation(compensated);
     }
 
     @Override

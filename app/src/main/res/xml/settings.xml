@@ -124,7 +124,7 @@
             android:entryValues="@array/orientationUnitsValues"
             android:key="prefOrientationUnits"
             android:summary="%s"
-            android:title="Orientation Units"
+            android:title="Angular Units"
             app:iconSpaceReserved="false" />
 
     </PreferenceCategory>
