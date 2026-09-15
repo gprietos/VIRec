@@ -432,6 +432,16 @@ public class RecordingViewerActivity extends AppCompatActivity {
         seekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override
             public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                if (!fromUser) {
+                    return;
+                }
+                MediaPlayer mp = currentMediaPlayer(isMain);
+                if (mp != null) {
+                    mp.seekTo(progress);
+                }
+                if (isMain) {
+                    onMainVideoProgress(progress);
+                }
             }
 
             @Override
@@ -525,6 +535,10 @@ public class RecordingViewerActivity extends AppCompatActivity {
 
             seekBar.setMax(mp.getDuration());
             playPauseButton.setImageResource(R.drawable.ic_baseline_play_arrow_24);
+            // A MediaPlayer that has never played or been seeked has nothing decoded to its
+            // Surface yet, so without this the TextureView shows blank black until first played.
+            // Seeking to 0 forces the first frame to render while leaving playback paused.
+            mp.seekTo(0);
         });
 
         // TextureView's SurfaceTexture isn't available until the view is attached/laid out.

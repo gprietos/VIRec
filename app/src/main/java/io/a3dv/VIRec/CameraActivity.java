@@ -598,6 +598,34 @@ public class CameraActivity extends CameraActivityBase
                 break;
         }
         mOverlayInfoContainer.setLayoutParams(params);
+
+        // Rotating a tall/narrow rectangle about its own center (the default pivot) swaps which
+        // dimension is "horizontal" at 90/270 degrees, so the visual bounding box drifts away
+        // from the corner the rules above just anchored it to -- by exactly (h-w)/2 in both
+        // directions, since the center stays fixed but the half-width/half-height swap. This
+        // translation cancels that drift so the visual box stays flush against the intended
+        // corner/margin at every angle. Not needed at 0/180, where the box isn't transposed.
+        int w = mOverlayInfoContainer.getWidth();
+        int h = mOverlayInfoContainer.getHeight();
+        if (w > 0 && h > 0) {
+            float translation = (h - w) / 2f;
+            switch (bucket) {
+                case 90:
+                    mOverlayInfoContainer.setTranslationX(translation);
+                    mOverlayInfoContainer.setTranslationY(translation);
+                    break;
+                case 270:
+                    mOverlayInfoContainer.setTranslationX(-translation);
+                    mOverlayInfoContainer.setTranslationY(-translation);
+                    break;
+                case 0:
+                case 180:
+                default:
+                    mOverlayInfoContainer.setTranslationX(0);
+                    mOverlayInfoContainer.setTranslationY(0);
+                    break;
+            }
+        }
         mOverlayInfoContainer.setRotation(compensated);
     }
 
